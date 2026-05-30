@@ -11,6 +11,7 @@ const Backend = okys.systems.backend_stencil.Backend;
 const CallType = okys.systems.backend_stencil.CallType;
 
 const OKY_ANTIALIAS: u32 = 1 << 0;
+const OKY_STENCIL_STROKES: u32 = 1 << 1;
 
 const default_scissor: color.Scissor = .{
     .xform = .{ 1, 0, 0, 1, 0, 0 },
@@ -165,7 +166,7 @@ test "stencil backend drops degenerate fill paths" {
 }
 
 test "stencil backend queues stroke and triangle snapshots" {
-    const backend = try Backend.create(testing.allocator);
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_STENCIL_STROKES);
     defer backend.destroy();
     const iface = backend.interface();
 
@@ -173,14 +174,17 @@ test "stencil backend queues stroke and triangle snapshots" {
     const points = [_]Point{
         .{ .x = 0, .y = 0 },
         .{ .x = 10, .y = 0 },
+        .{ .x = 10, .y = 10 },
+        .{ .x = 0, .y = 10 },
     };
-    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 2, .closed = false }};
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
 
     iface.stroke(iface.ctx, &paint, &default_scissor, 3, &paths, &points);
     try testing.expectEqual(@as(usize, 1), backend.calls.items.len);
     try testing.expectEqual(CallType.stroke, backend.calls.items[0].call_type);
     try testing.expectEqual(@as(f32, 3), backend.calls.items[0].width);
-    try testing.expectEqual(@as(usize, 2), backend.vertices.items.len);
+    try testing.expectEqual(@as(u32, 4), backend.calls.items[0].cover.count);
+    try testing.expectEqual(@as(usize, 8), backend.vertices.items.len);
 
     const verts = [_]Vertex{
         .{ .x = 0, .y = 0, .u = 0, .v = 0 },
@@ -191,6 +195,50 @@ test "stencil backend queues stroke and triangle snapshots" {
     try testing.expectEqual(@as(usize, 2), backend.calls.items.len);
     try testing.expectEqual(CallType.triangles, backend.calls.items[1].call_type);
     try testing.expectEqual(@as(u32, 3), backend.calls.items[1].vertices.count);
+}
+
+test "stencil backend queues direct convex stroke when stencil strokes are off" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(0, 1, 0, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 10, .y = 0 },
+        .{ .x = 0, .y = 10 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
+
+    iface.stroke(iface.ctx, &paint, &default_scissor, 3, &paths, &points);
+
+    try testing.expectEqual(CallType.stroke_convex, backend.calls.items[0].call_type);
+    try testing.expectEqual(@as(u32, 0), backend.calls.items[0].cover.count);
+    try testing.expectEqual(@as(usize, 3), backend.vertices.items.len);
+}
+
+test "stencil backend queues antialiased stenciled stroke fringe" {
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(0, 1, 0, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0, .dmx = 1, .dmy = 0 },
+        .{ .x = 10, .y = 0, .dmx = 0, .dmy = 1 },
+        .{ .x = 10, .y = 10, .dmx = -1, .dmy = 0 },
+        .{ .x = 0, .y = 10, .dmx = 0, .dmy = -1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
+
+    iface.stroke(iface.ctx, &paint, &default_scissor, 3, &paths, &points);
+
+    try testing.expectEqual(CallType.stroke, backend.calls.items[0].call_type);
+    try testing.expectEqual(@as(u32, 18), backend.calls.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 4), backend.paths.items[0].vertices.start);
+    try testing.expectEqual(@as(u32, 4), backend.paths.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 8), backend.paths.items[0].fringe.start);
+    try testing.expectEqual(@as(u32, 10), backend.paths.items[0].fringe.count);
 }
 
 test "stencil backend texture callbacks store dimensions" {

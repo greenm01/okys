@@ -10,6 +10,7 @@ const stencil = okys.systems.backend_stencil;
 const Backend = stencil.Backend;
 
 const OKY_ANTIALIAS: u32 = 1 << 0;
+const OKY_STENCIL_STROKES: u32 = 1 << 1;
 
 const disabled_scissor: color.Scissor = .{
     .xform = .{ 0, 0, 0, 0, 0, 0 },
@@ -154,6 +155,59 @@ test "draw plan emits antialiased convex fill fringe after indexed fill" {
     try testing.expectEqual(@as(u32, 3), backend.draw_ops.items[1].vertices.start);
     try testing.expectEqual(@as(u32, 8), backend.draw_ops.items[1].vertices.count);
     try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[1].uniform_index);
+}
+
+test "draw plan emits stenciled stroke fringe before cover" {
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0, .dmx = 1, .dmy = 0 },
+        .{ .x = 10, .y = 0, .dmx = 0, .dmy = 1 },
+        .{ .x = 10, .y = 10, .dmx = -1, .dmy = 0 },
+        .{ .x = 0, .y = 10, .dmx = 0, .dmy = -1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
+
+    iface.stroke(iface.ctx, &paint, &disabled_scissor, 3, &paths, &points);
+    try testing.expect(backend.buildDrawPlan());
+
+    try testing.expectEqual(@as(f32, 1), backend.uniforms.items[0].edge_alpha_multiplier);
+    try testing.expectEqual(@as(usize, 3), backend.draw_ops.items.len);
+    try testing.expectEqual(stencil.DrawOpKind.stencil_fill, backend.draw_ops.items[0].kind);
+    try testing.expectEqual(stencil.StencilMode.nonzero, backend.draw_ops.items[0].stencil_mode);
+    try testing.expectEqual(@as(u32, 4), backend.draw_ops.items[0].vertices.start);
+    try testing.expectEqual(@as(u32, 6), backend.draw_ops.items[0].indices.count);
+    try testing.expectEqual(stencil.DrawOpKind.fringe_stencil_fill, backend.draw_ops.items[1].kind);
+    try testing.expectEqual(@as(u32, 8), backend.draw_ops.items[1].vertices.start);
+    try testing.expectEqual(@as(u32, 10), backend.draw_ops.items[1].vertices.count);
+    try testing.expectEqual(stencil.DrawOpKind.cover_fill, backend.draw_ops.items[2].kind);
+    try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[2].vertices.start);
+    try testing.expectEqual(@as(u32, 4), backend.draw_ops.items[2].vertices.count);
+}
+
+test "draw plan emits direct convex stroke when stencil strokes are off" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 10, .y = 0 },
+        .{ .x = 0, .y = 10 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
+
+    iface.stroke(iface.ctx, &paint, &disabled_scissor, 3, &paths, &points);
+    try testing.expect(backend.buildDrawPlan());
+
+    try testing.expectEqual(@as(usize, 1), backend.draw_ops.items.len);
+    try testing.expectEqual(stencil.DrawOpKind.convex_fill, backend.draw_ops.items[0].kind);
+    try testing.expectEqual(@as(u32, 3), backend.draw_ops.items[0].indices.count);
+    try testing.expectEqual(@as(f32, 0), backend.uniforms.items[0].edge_alpha_multiplier);
 }
 
 test "draw plan can encode even-odd stencil fills internally" {

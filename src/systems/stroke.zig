@@ -12,14 +12,19 @@ const path = @import("../types/path.zig");
 const Point = path.Point;
 const flatten = @import("flatten.zig");
 const convex = @import("convex.zig");
+const xforms = @import("transform.zig");
 
 const Vec2 = struct { x: f32, y: f32 };
 
 pub fn buildOutline(ctx: *Context) void {
+    buildOutlineWithWidth(ctx, effectiveStrokeWidth(ctx));
+}
+
+pub fn buildOutlineWithWidth(ctx: *Context, stroke_width: f32) void {
     ctx.stroke_outline.clear();
     flatten.flatten(ctx);
 
-    const half_width = ctx.state().stroke_width * 0.5;
+    const half_width = stroke_width * 0.5;
     if (half_width <= 0) return;
 
     for (ctx.cache.paths.items) |src_path| {
@@ -33,7 +38,12 @@ pub fn buildOutline(ctx: *Context) void {
         }
     }
 
-    finishOutline(&ctx.stroke_outline);
+    finishOutline(&ctx.stroke_outline, ctx.state().miter_limit);
+}
+
+pub fn effectiveStrokeWidth(ctx: *Context) f32 {
+    const scale = xforms.averageScale(&ctx.state().xform);
+    return @min(@max(ctx.state().stroke_width * scale, 0), 200);
 }
 
 fn buildClosedPath(ctx: *Context, pts: []const Point, w: f32) void {
@@ -205,7 +215,7 @@ fn addOutlinePoint(ctx: *Context, p: Vec2) void {
     ctx.stroke_outline.addPoint(ctx.gpa, p.x, p.y, .{ .corner = true }, ctx.dist_tol);
 }
 
-fn finishOutline(outline: *PathCache) void {
+fn finishOutline(outline: *PathCache, miter_limit: f32) void {
     if (outline.paths.items.len == 0) {
         outline.bounds = .{ 0, 0, 0, 0 };
         return;
@@ -226,8 +236,43 @@ fn finishOutline(outline: *PathCache) void {
             p0.len = normalize(&p0.dx, &p0.dy);
         }
         outline_path.closed = true;
-        outline_path.convex = convex.isConvex(pts);
+        calculateJoins(outline_path, pts, miter_limit);
     }
+}
+
+fn calculateJoins(active_path: *path.PathRange, pts: []Point, miter_limit: f32) void {
+    if (pts.len == 0) return;
+
+    for (pts, 0..) |*p1, i| {
+        const prev_i = if (i == 0) pts.len - 1 else i - 1;
+        const p0 = pts[prev_i];
+        const dlx0 = p0.dy;
+        const dly0 = -p0.dx;
+        const dlx1 = p1.dy;
+        const dly1 = -p1.dx;
+
+        p1.dmx = (dlx0 + dlx1) * 0.5;
+        p1.dmy = (dly0 + dly1) * 0.5;
+        const dmr2 = p1.dmx * p1.dmx + p1.dmy * p1.dmy;
+        if (dmr2 > 0.000001) {
+            const s = @min(1.0 / dmr2, 600.0);
+            p1.dmx *= s;
+            p1.dmy *= s;
+        }
+
+        p1.flags = .{ .corner = true };
+        if (cross(p0.dx, p0.dy, p1.dx, p1.dy) > 0) {
+            p1.flags.left = true;
+        }
+        if ((dmr2 * 1.01 * 1.01) < 1.0) {
+            p1.flags.inner_bevel = true;
+        }
+        if ((dmr2 * miter_limit * miter_limit) < 1.0) {
+            p1.flags.bevel = true;
+        }
+    }
+
+    active_path.convex = active_path.closed and convex.isConvex(pts);
 }
 
 fn endpointSegment(pts: []const Point, i: usize) Point {
@@ -260,6 +305,10 @@ fn normalFromDir(dir: Vec2) Vec2 {
 fn offsetPoint(p: Point, normal: Vec2, w: f32, side: i32) Vec2 {
     const s: f32 = if (side > 0) 1 else -1;
     return .{ .x = p.x + normal.x * w * s, .y = p.y + normal.y * w * s };
+}
+
+fn cross(dx0: f32, dy0: f32, dx1: f32, dy1: f32) f32 {
+    return dx1 * dy0 - dx0 * dy1;
 }
 
 fn normalize(x: *f32, y: *f32) f32 {

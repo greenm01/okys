@@ -21,6 +21,8 @@ const flatten = okys.systems.flatten;
 const stroke = okys.systems.stroke;
 const xforms = okys.systems.transform;
 
+const OKY_ANTIALIAS: u32 = 1 << 0;
+
 test "all production modules analyze" {
     _ = okys.types.color;
     _ = okys.types.command;
@@ -390,6 +392,7 @@ test "closed rectangle stroke produces closed outline contours" {
     try testing.expect(outline_path.closed);
     const pts = ctx.stroke_outline.points.items[outline_path.point_start..][0..outline_path.point_count];
     try testing.expect(@abs(polyArea(pts)) > 0.001);
+    try testing.expect(pts[0].dmx != 0 or pts[0].dmy != 0);
 }
 
 test "low miter limit adds bevel points on sharp closed stroke" {
@@ -532,6 +535,42 @@ test "stroke records shared outline geometry and style snapshots" {
     state_ops.strokeWidth(ctx, 1);
     try testing.expectApproxEqAbs(@as(f32, 0.2), backend.last_stroke.paint.inner_color.g, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 10), backend.last_stroke.width, 0.001);
+}
+
+test "stroke render uses transform-scaled width" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    ctx.installBackend(backend.interface());
+
+    state_ops.strokeWidth(ctx, 2);
+    state_ops.scale(ctx, 2, 4);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 10, 0);
+
+    render_ops.stroke(ctx);
+
+    try testing.expectEqual(@as(usize, 1), backend.stroke_calls);
+    try testing.expectApproxEqAbs(@as(f32, 6), backend.last_stroke.width, 0.001);
+}
+
+test "thin antialiased stroke scales alpha and clamps to fringe width" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, OKY_ANTIALIAS);
+    defer ctx.destroy();
+    ctx.installBackend(backend.interface());
+
+    frame_ops.beginFrame(ctx, 100, 100, 2);
+    state_ops.strokeWidth(ctx, 0.25);
+    paint_ops.strokeColor(ctx, color.rgbaf(0.1, 0.2, 0.3, 0.8));
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 10, 0);
+
+    render_ops.stroke(ctx);
+
+    try testing.expectEqual(@as(usize, 1), backend.stroke_calls);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), backend.last_stroke.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.2), backend.last_stroke.paint.inner_color.a, 0.001);
 }
 
 test "empty draw calls and no backend do not emit render calls" {

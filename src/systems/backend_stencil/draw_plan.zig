@@ -17,6 +17,7 @@ pub const CallType = enum {
     fill,
     fill_convex,
     stroke,
+    stroke_convex,
     triangles,
 };
 
@@ -116,8 +117,9 @@ pub fn build(
         switch (call.call_type) {
             .fill => try appendFill(call, queued_paths, fill_rule, uniforms, indices, draw_ops),
             .fill_convex => try appendConvexFill(call, queued_paths, uniforms, indices, draw_ops),
+            .stroke => try appendStroke(call, queued_paths, uniforms, indices, draw_ops),
+            .stroke_convex => try appendConvexFill(call, queued_paths, uniforms, indices, draw_ops),
             .triangles => appendTriangles(call, uniforms, draw_ops),
-            .stroke => {},
         }
     }
 }
@@ -199,6 +201,50 @@ fn appendConvexFill(
                 .winding = p.winding,
             });
         }
+    }
+}
+
+fn appendStroke(
+    call: Call,
+    queued_paths: []const QueuedPath,
+    uniforms: *std.ArrayList(PaintUniform),
+    indices: *std.ArrayList(u16),
+    draw_ops: *std.ArrayList(DrawOp),
+) !void {
+    const uniform_index = appendUniform(call, uniforms);
+
+    for (pathsFor(call, queued_paths)) |p| {
+        if (p.vertices.count < 3) continue;
+        const fan_indices = try appendFanIndices(p.vertices, indices);
+        draw_ops.appendAssumeCapacity(.{
+            .kind = .stencil_fill,
+            .primitive = .triangles,
+            .vertices = p.vertices,
+            .indices = fan_indices,
+            .uniform_index = uniform_index,
+            .stencil_mode = .nonzero,
+            .winding = p.winding,
+        });
+    }
+
+    for (pathsFor(call, queued_paths)) |p| {
+        if (p.fringe.count == 0) continue;
+        draw_ops.appendAssumeCapacity(.{
+            .kind = .fringe_stencil_fill,
+            .primitive = .triangle_strip,
+            .vertices = p.fringe,
+            .uniform_index = uniform_index,
+            .winding = p.winding,
+        });
+    }
+
+    if (call.cover.count > 0) {
+        draw_ops.appendAssumeCapacity(.{
+            .kind = .cover_fill,
+            .primitive = .triangle_strip,
+            .vertices = call.cover,
+            .uniform_index = uniform_index,
+        });
     }
 }
 
@@ -308,8 +354,18 @@ fn estimateDrawOps(calls: []const Call, queued_paths: []const QueuedPath) usize 
                     count += 1 + @as(usize, @intFromBool(p.fringe.count > 0));
                 }
             },
+            .stroke => {
+                for (pathsFor(call, queued_paths)) |p| {
+                    count += 1 + @as(usize, @intFromBool(p.fringe.count > 0));
+                }
+                count += @as(usize, @intFromBool(call.cover.count > 0));
+            },
+            .stroke_convex => {
+                for (pathsFor(call, queued_paths)) |p| {
+                    count += 1 + @as(usize, @intFromBool(p.fringe.count > 0));
+                }
+            },
             .triangles => count += @as(usize, @intFromBool(call.vertices.count >= 3)),
-            .stroke => {},
         }
     }
     return count;
@@ -319,8 +375,7 @@ fn estimateUniforms(calls: []const Call) usize {
     var count: usize = 0;
     for (calls) |call| {
         switch (call.call_type) {
-            .fill, .fill_convex, .triangles => count += 1,
-            .stroke => {},
+            .fill, .fill_convex, .stroke, .stroke_convex, .triangles => count += 1,
         }
     }
     return count;
@@ -330,12 +385,12 @@ fn estimateFanIndices(calls: []const Call, queued_paths: []const QueuedPath) usi
     var count: usize = 0;
     for (calls) |call| {
         switch (call.call_type) {
-            .fill, .fill_convex => {
+            .fill, .fill_convex, .stroke, .stroke_convex => {
                 for (pathsFor(call, queued_paths)) |p| {
                     count += fanIndexCount(p.vertices.count);
                 }
             },
-            .stroke, .triangles => {},
+            .triangles => {},
         }
     }
     return count;

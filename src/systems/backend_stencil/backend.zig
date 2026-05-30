@@ -19,6 +19,7 @@ pub const draw_plan = @import("draw_plan.zig");
 pub const replay = @import("replay.zig");
 
 const OKY_ANTIALIAS: u32 = 1 << 0;
+const OKY_STENCIL_STROKES: u32 = 1 << 1;
 
 pub const max_vertices = draw_plan.max_vertices;
 pub const max_indices = draw_plan.max_indices;
@@ -57,6 +58,7 @@ pub const Backend = struct {
     viewport_dpr: f32 = 1,
     fill_rule: FillRule = .nonzero,
     antialias: bool = false,
+    stencil_strokes: bool = false,
     flush_count: usize = 0,
 
     pub fn create(gpa: std.mem.Allocator) !*Backend {
@@ -68,6 +70,7 @@ pub const Backend = struct {
         self.* = .{
             .gpa = gpa,
             .antialias = (flags & OKY_ANTIALIAS) != 0,
+            .stencil_strokes = (flags & OKY_STENCIL_STROKES) != 0,
         };
         return self;
     }
@@ -214,26 +217,53 @@ pub const Backend = struct {
     fn queueStroke(self: *Backend, paint: *const Paint, scissor: *const Scissor, width: f32, input_paths: []const PathRange, points: []const Point) void {
         var valid_path_count: usize = 0;
         var vertex_count: usize = 0;
+        var single_convex = false;
+        var bounds = Bounds.empty();
+        const fringe_width = self.fringeWidth();
+
         for (input_paths) |p| {
             if (!validStrokePath(p, points.len)) continue;
             valid_path_count += 1;
-            vertex_count += p.point_count;
+            vertex_count += self.fillVertexCount(p.point_count);
+            single_convex = p.convex;
+            bounds.includePath(points[p.point_start..][0..p.point_count]);
         }
         if (valid_path_count == 0) return;
-        if (!self.ensureRoom(valid_path_count, vertex_count)) return;
+
+        const direct_convex = valid_path_count == 1 and single_convex and !self.stencil_strokes;
+        const call_type: CallType = if (direct_convex) .stroke_convex else .stroke;
+        const cover_count: usize = if (call_type == .stroke) 4 else 0;
+        const total_vertices = vertex_count + cover_count;
+        if (!self.ensureRoom(valid_path_count, total_vertices)) return;
 
         const call_path_start = self.paths.items.len;
         const call_vertex_start = self.vertices.items.len;
+        var cover: Range = .{};
+
+        if (cover_count > 0) {
+            cover = .{ .start = @intCast(self.vertices.items.len), .count = 4 };
+            self.appendCoverQuad(bounds.expanded(fringe_width));
+        }
+
         for (input_paths) |p| {
             if (!validStrokePath(p, points.len)) continue;
 
             const start = self.vertices.items.len;
             const path_points = points[p.point_start..][0..p.point_count];
-            for (path_points) |pt| {
-                self.vertices.appendAssumeCapacity(vertexFromPoint(pt));
+            self.appendFillVertices(path_points, fringe_width);
+            const stroke_count = self.vertices.items.len - start;
+            var fringe: Range = .{};
+            if (self.antialias) {
+                const fringe_start = self.vertices.items.len;
+                self.appendFillFringe(path_points, fringe_width);
+                fringe = .{
+                    .start = @intCast(fringe_start),
+                    .count = @intCast(self.vertices.items.len - fringe_start),
+                };
             }
             self.paths.appendAssumeCapacity(.{
-                .vertices = .{ .start = @intCast(start), .count = p.point_count },
+                .vertices = .{ .start = @intCast(start), .count = @intCast(stroke_count) },
+                .fringe = fringe,
                 .winding = p.winding,
                 .closed = p.closed,
                 .convex = p.convex,
@@ -241,12 +271,15 @@ pub const Backend = struct {
         }
 
         self.calls.appendAssumeCapacity(.{
-            .call_type = .stroke,
+            .call_type = call_type,
             .paint = paint.*,
             .scissor = scissor.*,
             .width = width,
+            .bounds = bounds.expanded(fringe_width),
             .paths = .{ .start = @intCast(call_path_start), .count = @intCast(valid_path_count) },
-            .vertices = .{ .start = @intCast(call_vertex_start), .count = @intCast(vertex_count) },
+            .vertices = .{ .start = @intCast(call_vertex_start), .count = @intCast(total_vertices) },
+            .cover = cover,
+            .antialias = self.antialias,
         });
     }
 
@@ -404,7 +437,7 @@ fn validFillPath(p: PathRange, point_len: usize) bool {
 }
 
 fn validStrokePath(p: PathRange, point_len: usize) bool {
-    return p.point_count >= 2 and pathInBounds(p, point_len);
+    return p.point_count >= 3 and pathInBounds(p, point_len);
 }
 
 fn pathInBounds(p: PathRange, point_len: usize) bool {
@@ -414,3 +447,38 @@ fn pathInBounds(p: PathRange, point_len: usize) bool {
 fn vertexFromPoint(p: Point) Vertex {
     return .{ .x = p.x, .y = p.y, .u = 0.5, .v = 1.0 };
 }
+
+const Bounds = struct {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+
+    fn empty() Bounds {
+        return .{
+            .min_x = 1e6,
+            .min_y = 1e6,
+            .max_x = -1e6,
+            .max_y = -1e6,
+        };
+    }
+
+    fn includePath(self: *Bounds, pts: []const Point) void {
+        for (pts) |pt| {
+            self.min_x = @min(self.min_x, pt.x);
+            self.min_y = @min(self.min_y, pt.y);
+            self.max_x = @max(self.max_x, pt.x);
+            self.max_y = @max(self.max_y, pt.y);
+        }
+    }
+
+    fn expanded(self: Bounds, amount: f32) [4]f32 {
+        if (self.min_x > self.max_x or self.min_y > self.max_y) return .{ 0, 0, 0, 0 };
+        return .{
+            self.min_x - amount,
+            self.min_y - amount,
+            self.max_x + amount,
+            self.max_y + amount,
+        };
+    }
+};

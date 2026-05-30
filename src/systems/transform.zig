@@ -61,6 +61,12 @@ pub fn inverse(t: *const Transform) ?Transform {
     };
 }
 
+pub fn averageScale(t: *const Transform) f32 {
+    const sx = @sqrt(t[0] * t[0] + t[2] * t[2]);
+    const sy = @sqrt(t[1] * t[1] + t[3] * t[3]);
+    return (sx + sy) * 0.5;
+}
+
 pub fn point(t: *const Transform, x: f32, y: f32) [2]f32 {
     return .{
         x * t[0] + y * t[2] + t[4],
