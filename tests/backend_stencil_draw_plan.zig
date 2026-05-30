@@ -14,7 +14,7 @@ const disabled_scissor: color.Scissor = .{
     .extent = .{ -1, -1 },
 };
 
-test "draw plan emits stencil fans then cover quad for non-convex fill" {
+test "draw plan emits indexed stencil triangles then cover quad for non-convex fill" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -41,18 +41,22 @@ test "draw plan emits stencil fans then cover quad for non-convex fill" {
     try testing.expectEqual(@as(usize, 1), backend.uniforms.items.len);
     try testing.expectEqual(@as(usize, 2), backend.draw_ops.items.len);
     try testing.expectEqual(stencil.DrawOpKind.stencil_fill, backend.draw_ops.items[0].kind);
-    try testing.expectEqual(stencil.Primitive.triangle_fan, backend.draw_ops.items[0].primitive);
+    try testing.expectEqual(stencil.Primitive.triangles, backend.draw_ops.items[0].primitive);
     try testing.expectEqual(stencil.StencilMode.nonzero, backend.draw_ops.items[0].stencil_mode);
     try testing.expectEqual(@as(u32, 4), backend.draw_ops.items[0].vertices.start);
     try testing.expectEqual(@as(u32, 4), backend.draw_ops.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[0].indices.start);
+    try testing.expectEqual(@as(u32, 6), backend.draw_ops.items[0].indices.count);
     try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[0].uniform_index);
     try testing.expectEqual(.cw, backend.draw_ops.items[0].winding);
+    try testing.expectEqualSlices(u16, &.{ 4, 5, 6, 4, 6, 7 }, backend.indices.items);
 
     try testing.expectEqual(stencil.DrawOpKind.cover_fill, backend.draw_ops.items[1].kind);
     try testing.expectEqual(stencil.Primitive.triangle_strip, backend.draw_ops.items[1].primitive);
     try testing.expectEqual(stencil.StencilMode.none, backend.draw_ops.items[1].stencil_mode);
     try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[1].vertices.start);
     try testing.expectEqual(@as(u32, 4), backend.draw_ops.items[1].vertices.count);
+    try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[1].indices.count);
     try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[1].uniform_index);
 
     const uniform = backend.uniforms.items[0];
@@ -64,7 +68,7 @@ test "draw plan emits stencil fans then cover quad for non-convex fill" {
     try testing.expectApproxEqAbs(@as(f32, 0.5), uniform.inner_color.a, 0.001);
 }
 
-test "draw plan emits convex fills as direct fan ops" {
+test "draw plan emits convex fills as indexed triangle ops" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -83,10 +87,13 @@ test "draw plan emits convex fills as direct fan ops" {
     try testing.expectEqual(@as(usize, 1), backend.uniforms.items.len);
     try testing.expectEqual(@as(usize, 1), backend.draw_ops.items.len);
     try testing.expectEqual(stencil.DrawOpKind.convex_fill, backend.draw_ops.items[0].kind);
-    try testing.expectEqual(stencil.Primitive.triangle_fan, backend.draw_ops.items[0].primitive);
+    try testing.expectEqual(stencil.Primitive.triangles, backend.draw_ops.items[0].primitive);
     try testing.expectEqual(stencil.StencilMode.none, backend.draw_ops.items[0].stencil_mode);
     try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[0].vertices.start);
     try testing.expectEqual(@as(u32, 3), backend.draw_ops.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[0].indices.start);
+    try testing.expectEqual(@as(u32, 3), backend.draw_ops.items[0].indices.count);
+    try testing.expectEqualSlices(u16, &.{ 0, 1, 2 }, backend.indices.items);
 }
 
 test "draw plan can encode even-odd stencil fills internally" {
@@ -108,7 +115,9 @@ test "draw plan can encode even-odd stencil fills internally" {
     try testing.expect(backend.buildDrawPlan());
 
     try testing.expectEqual(stencil.StencilMode.even_odd, backend.draw_ops.items[0].stencil_mode);
+    try testing.expectEqual(@as(u32, 6), backend.draw_ops.items[0].indices.count);
     try testing.expectEqual(stencil.DrawOpKind.cover_fill, backend.draw_ops.items[1].kind);
+    try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[1].indices.count);
 }
 
 test "draw plan emits direct triangles with packed scissor uniform" {
@@ -135,6 +144,8 @@ test "draw plan emits direct triangles with packed scissor uniform" {
     try testing.expectEqual(stencil.DrawOpKind.triangles, backend.draw_ops.items[0].kind);
     try testing.expectEqual(stencil.Primitive.triangles, backend.draw_ops.items[0].primitive);
     try testing.expectEqual(@as(u32, 3), backend.draw_ops.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 0), backend.draw_ops.items[0].indices.count);
+    try testing.expectEqual(@as(usize, 0), backend.indices.items.len);
 
     const uniform = backend.uniforms.items[0];
     try testing.expect(uniform.scissor_enabled);
@@ -164,6 +175,7 @@ test "draw plan is transient and clears on flush" {
     iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 0, 0, 10, 10 }, &paths, &points);
     try testing.expect(backend.buildDrawPlan());
     try testing.expect(backend.draw_ops.items.len > 0);
+    try testing.expect(backend.indices.items.len > 0);
     try testing.expect(backend.uniforms.items.len > 0);
 
     iface.flush(iface.ctx);
@@ -171,6 +183,7 @@ test "draw plan is transient and clears on flush" {
     try testing.expectEqual(@as(usize, 0), backend.calls.items.len);
     try testing.expectEqual(@as(usize, 0), backend.paths.items.len);
     try testing.expectEqual(@as(usize, 0), backend.vertices.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.indices.items.len);
     try testing.expectEqual(@as(usize, 0), backend.draw_ops.items.len);
     try testing.expectEqual(@as(usize, 0), backend.uniforms.items.len);
 }

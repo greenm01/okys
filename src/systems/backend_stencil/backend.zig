@@ -17,7 +17,8 @@ const Vertex = path.Vertex;
 const RenderInterface = @import("../../render/interface.zig").RenderInterface;
 pub const draw_plan = @import("draw_plan.zig");
 
-pub const max_vertices: usize = 65535;
+pub const max_vertices = draw_plan.max_vertices;
+pub const max_indices = draw_plan.max_indices;
 
 pub const CallType = draw_plan.CallType;
 pub const DrawOp = draw_plan.DrawOp;
@@ -35,6 +36,7 @@ pub const Backend = struct {
     calls: std.ArrayList(Call) = .empty,
     paths: std.ArrayList(QueuedPath) = .empty,
     vertices: std.ArrayList(Vertex) = .empty,
+    indices: std.ArrayList(u16) = .empty,
     uniforms: std.ArrayList(PaintUniform) = .empty,
     draw_ops: std.ArrayList(DrawOp) = .empty,
     textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
@@ -56,6 +58,7 @@ pub const Backend = struct {
         self.calls.deinit(gpa);
         self.paths.deinit(gpa);
         self.vertices.deinit(gpa);
+        self.indices.deinit(gpa);
         self.uniforms.deinit(gpa);
         self.draw_ops.deinit(gpa);
         self.textures.deinit(gpa);
@@ -84,6 +87,7 @@ pub const Backend = struct {
         self.calls.clearRetainingCapacity();
         self.paths.clearRetainingCapacity();
         self.vertices.clearRetainingCapacity();
+        self.indices.clearRetainingCapacity();
         self.uniforms.clearRetainingCapacity();
         self.draw_ops.clearRetainingCapacity();
     }
@@ -93,9 +97,9 @@ pub const Backend = struct {
             self.gpa,
             self.calls.items,
             self.paths.items,
-            self.vertices.items,
             self.fill_rule,
             &self.uniforms,
+            &self.indices,
             &self.draw_ops,
         ) catch return false;
         return true;

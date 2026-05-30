@@ -7,9 +7,11 @@ const Paint = color.Paint;
 const Scissor = color.Scissor;
 const Transform = color.Transform;
 const path = @import("../../types/path.zig");
-const Vertex = path.Vertex;
 const Winding = path.Winding;
 const xforms = @import("../transform.zig");
+
+pub const max_vertices: usize = 65535;
+pub const max_indices: usize = (max_vertices - 2) * 3;
 
 pub const CallType = enum {
     fill,
@@ -24,7 +26,6 @@ pub const FillRule = enum {
 };
 
 pub const Primitive = enum {
-    triangle_fan,
     triangle_strip,
     triangles,
 };
@@ -83,6 +84,7 @@ pub const DrawOp = struct {
     kind: DrawOpKind,
     primitive: Primitive,
     vertices: Range,
+    indices: Range = .{},
     uniform_index: u32,
     stencil_mode: StencilMode = .none,
     winding: Winding = .ccw,
@@ -92,23 +94,23 @@ pub fn build(
     gpa: std.mem.Allocator,
     calls: []const Call,
     queued_paths: []const QueuedPath,
-    vertices: []const Vertex,
     fill_rule: FillRule,
     uniforms: *std.ArrayList(PaintUniform),
+    indices: *std.ArrayList(u16),
     draw_ops: *std.ArrayList(DrawOp),
 ) !void {
-    _ = vertices;
-
     uniforms.clearRetainingCapacity();
+    indices.clearRetainingCapacity();
     draw_ops.clearRetainingCapacity();
 
     try uniforms.ensureUnusedCapacity(gpa, calls.len);
+    try indices.ensureUnusedCapacity(gpa, estimateFanIndices(calls, queued_paths));
     try draw_ops.ensureUnusedCapacity(gpa, estimateDrawOps(calls));
 
     for (calls) |call| {
         switch (call.call_type) {
-            .fill => appendFill(call, queued_paths, fill_rule, uniforms, draw_ops),
-            .fill_convex => appendConvexFill(call, queued_paths, uniforms, draw_ops),
+            .fill => try appendFill(call, queued_paths, fill_rule, uniforms, indices, draw_ops),
+            .fill_convex => try appendConvexFill(call, queued_paths, uniforms, indices, draw_ops),
             .triangles => appendTriangles(call, uniforms, draw_ops),
             .stroke => {},
         }
@@ -120,8 +122,9 @@ fn appendFill(
     queued_paths: []const QueuedPath,
     fill_rule: FillRule,
     uniforms: *std.ArrayList(PaintUniform),
+    indices: *std.ArrayList(u16),
     draw_ops: *std.ArrayList(DrawOp),
-) void {
+) !void {
     const uniform_index = appendUniform(call, uniforms);
     const stencil_mode: StencilMode = switch (fill_rule) {
         .nonzero => .nonzero,
@@ -130,10 +133,12 @@ fn appendFill(
 
     for (pathsFor(call, queued_paths)) |p| {
         if (p.vertices.count < 3) continue;
+        const fan_indices = try appendFanIndices(p.vertices, indices);
         draw_ops.appendAssumeCapacity(.{
             .kind = .stencil_fill,
-            .primitive = .triangle_fan,
+            .primitive = .triangles,
             .vertices = p.vertices,
+            .indices = fan_indices,
             .uniform_index = uniform_index,
             .stencil_mode = stencil_mode,
             .winding = p.winding,
@@ -154,15 +159,18 @@ fn appendConvexFill(
     call: Call,
     queued_paths: []const QueuedPath,
     uniforms: *std.ArrayList(PaintUniform),
+    indices: *std.ArrayList(u16),
     draw_ops: *std.ArrayList(DrawOp),
-) void {
+) !void {
     const uniform_index = appendUniform(call, uniforms);
     for (pathsFor(call, queued_paths)) |p| {
         if (p.vertices.count < 3) continue;
+        const fan_indices = try appendFanIndices(p.vertices, indices);
         draw_ops.appendAssumeCapacity(.{
             .kind = .convex_fill,
-            .primitive = .triangle_fan,
+            .primitive = .triangles,
             .vertices = p.vertices,
+            .indices = fan_indices,
             .uniform_index = uniform_index,
             .winding = p.winding,
         });
@@ -189,6 +197,26 @@ fn appendUniform(call: Call, uniforms: *std.ArrayList(PaintUniform)) u32 {
     const index: u32 = @intCast(uniforms.items.len);
     uniforms.appendAssumeCapacity(packUniform(&call.paint, &call.scissor));
     return index;
+}
+
+fn appendFanIndices(vertices: Range, indices: *std.ArrayList(u16)) !Range {
+    if (vertices.count < 3) return .{};
+
+    const vertex_start: usize = @intCast(vertices.start);
+    const vertex_count: usize = @intCast(vertices.count);
+    if (vertex_start + vertex_count > max_vertices) return error.FanIndexOverflow;
+
+    const index_start = indices.items.len;
+    for (0..vertex_count - 2) |i| {
+        indices.appendAssumeCapacity(@intCast(vertex_start));
+        indices.appendAssumeCapacity(@intCast(vertex_start + i + 1));
+        indices.appendAssumeCapacity(@intCast(vertex_start + i + 2));
+    }
+
+    return .{
+        .start = @intCast(index_start),
+        .count = @intCast((vertex_count - 2) * 3),
+    };
 }
 
 fn packUniform(paint: *const Paint, scissor: *const Scissor) PaintUniform {
@@ -249,4 +277,24 @@ fn estimateDrawOps(calls: []const Call) usize {
         }
     }
     return count;
+}
+
+fn estimateFanIndices(calls: []const Call, queued_paths: []const QueuedPath) usize {
+    var count: usize = 0;
+    for (calls) |call| {
+        switch (call.call_type) {
+            .fill, .fill_convex => {
+                for (pathsFor(call, queued_paths)) |p| {
+                    count += fanIndexCount(p.vertices.count);
+                }
+            },
+            .stroke, .triangles => {},
+        }
+    }
+    return count;
+}
+
+fn fanIndexCount(vertex_count: u32) usize {
+    if (vertex_count < 3) return 0;
+    return (@as(usize, vertex_count) - 2) * 3;
 }
