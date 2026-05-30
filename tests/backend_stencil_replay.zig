@@ -64,7 +64,7 @@ test "stencil replay emits even odd draw from indexed fill op" {
     try testing.expectEqual(.stencil_even_odd, backend.path_draws.items[0].kind);
 }
 
-test "stencil replay skips convex fills cover fills and direct triangles" {
+test "stencil replay keeps direct draws out of grouped stencil and cover lists" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -91,11 +91,15 @@ test "stencil replay skips convex fills cover fills and direct triangles" {
     try testing.expectEqual(stencil.DrawOpKind.triangles, backend.draw_ops.items[1].kind);
     try testing.expectEqual(@as(usize, 0), backend.stencil_draws.items.len);
     try testing.expectEqual(@as(usize, 0), backend.cover_draws.items.len);
-    try testing.expectEqual(@as(usize, 1), backend.path_draws.items.len);
+    try testing.expectEqual(@as(usize, 2), backend.path_draws.items.len);
     try testing.expectEqual(.convex, backend.path_draws.items[0].kind);
     try testing.expectEqual(@as(u32, 0), backend.path_draws.items[0].base_element);
     try testing.expectEqual(@as(u32, 3), backend.path_draws.items[0].element_count);
     try testing.expectEqual(@as(u32, 0), backend.path_draws.items[0].uniform_index);
+    try testing.expectEqual(.triangles, backend.path_draws.items[1].kind);
+    try testing.expectEqual(@as(u32, 3), backend.path_draws.items[1].base_element);
+    try testing.expectEqual(@as(u32, 3), backend.path_draws.items[1].element_count);
+    try testing.expectEqual(@as(u32, 1), backend.path_draws.items[1].uniform_index);
 }
 
 test "convex replay emits direct indexed paint draw without stencil or cover" {
@@ -105,6 +109,10 @@ test "convex replay emits direct indexed paint draw without stencil or cover" {
 
     var paint = color.solid(color.rgbaf(0.25, 0.5, 0.75, 0.5));
     paint.xform = .{ 2, 0, 0, 2, 4, 6 };
+    const scissor: color.Scissor = .{
+        .xform = .{ 2, 0, 0, 4, 10, 20 },
+        .extent = .{ 5, 6 },
+    };
     const points = [_]Point{
         .{ .x = 0, .y = 0 },
         .{ .x = 10, .y = 0 },
@@ -112,7 +120,7 @@ test "convex replay emits direct indexed paint draw without stencil or cover" {
     };
     const paths = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
 
-    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 0, 0, 10, 10 }, &paths, &points);
+    iface.fill(iface.ctx, &paint, &scissor, .{ 0, 0, 10, 10 }, &paths, &points);
     try testing.expect(backend.buildStencilPass());
 
     try testing.expectEqual(@as(usize, 0), backend.stencil_draws.items.len);
@@ -127,6 +135,42 @@ test "convex replay emits direct indexed paint draw without stencil or cover" {
     try testing.expectApproxEqAbs(@as(f32, 0.25), backend.frag_params.items[0].inner_color[1], 0.001);
     try testing.expectApproxEqAbs(@as(f32, 0.375), backend.frag_params.items[0].inner_color[2], 0.001);
     try testing.expectApproxEqAbs(@as(f32, 0.5), backend.frag_params.items[0].inner_color[3], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), backend.frag_params.items[0].scissor_mat0[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), backend.frag_params.items[0].scissor_mat1[1], 0.001);
+    try testing.expectEqual([4]f32{ 5, 6, 2, 4 }, backend.frag_params.items[0].scissor_extent_scale);
+}
+
+test "triangle replay emits direct paint draw with packed scissor params" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    var paint = color.solid(color.rgbaf(0.25, 0.5, 0.75, 0.5));
+    paint.xform = .{ 2, 0, 0, 4, 10, 20 };
+    const scissor: color.Scissor = .{
+        .xform = .{ 2, 0, 0, 4, 10, 20 },
+        .extent = .{ 5, 6 },
+    };
+    const verts = [_]Vertex{
+        .{ .x = 0, .y = 0, .u = 0, .v = 0 },
+        .{ .x = 1, .y = 0, .u = 1, .v = 0 },
+        .{ .x = 0, .y = 1, .u = 0, .v = 1 },
+    };
+
+    iface.triangles(iface.ctx, &paint, &scissor, &verts);
+    try testing.expect(backend.buildStencilPass());
+
+    try testing.expectEqual(@as(usize, 0), backend.stencil_draws.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.cover_draws.items.len);
+    try testing.expectEqual(@as(usize, 1), backend.path_draws.items.len);
+    try testing.expectEqual(.triangles, backend.path_draws.items[0].kind);
+    try testing.expectEqual(@as(u32, 0), backend.path_draws.items[0].base_element);
+    try testing.expectEqual(@as(u32, 3), backend.path_draws.items[0].element_count);
+    try testing.expectEqual(@as(u32, 0), backend.path_draws.items[0].uniform_index);
+    try testing.expectEqual(@as(usize, 1), backend.frag_params.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), backend.frag_params.items[0].scissor_mat0[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), backend.frag_params.items[0].scissor_mat1[1], 0.001);
+    try testing.expectEqual([4]f32{ 5, 6, 2, 4 }, backend.frag_params.items[0].scissor_extent_scale);
 }
 
 test "cover replay emits cover quad and packs fragment params" {
@@ -201,7 +245,7 @@ test "disabled scissor packs a pass through shader mask" {
     try testing.expectEqual([4]f32{ 1, 1, 1, 1 }, params.scissor_extent_scale);
 }
 
-test "mixed non convex and convex fills preserve replay order" {
+test "mixed non convex fill triangles and convex fill preserve replay order" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -215,16 +259,24 @@ test "mixed non convex and convex fills preserve replay order" {
     };
     const non_convex = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = false }};
     const convex = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
+    const verts = [_]Vertex{
+        .{ .x = 0, .y = 0, .u = 0, .v = 0 },
+        .{ .x = 1, .y = 0, .u = 1, .v = 0 },
+        .{ .x = 0, .y = 1, .u = 0, .v = 1 },
+    };
 
     iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 0, 0, 10, 10 }, &non_convex, &points);
+    iface.triangles(iface.ctx, &paint, &disabled_scissor, &verts);
     iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 0, 0, 10, 10 }, &convex, points[0..3]);
     try testing.expect(backend.buildStencilPass());
 
-    try testing.expectEqual(@as(usize, 3), backend.path_draws.items.len);
+    try testing.expectEqual(@as(usize, 4), backend.path_draws.items.len);
     try testing.expectEqual(.stencil_nonzero, backend.path_draws.items[0].kind);
     try testing.expectEqual(.cover, backend.path_draws.items[1].kind);
-    try testing.expectEqual(.convex, backend.path_draws.items[2].kind);
+    try testing.expectEqual(.triangles, backend.path_draws.items[2].kind);
+    try testing.expectEqual(.convex, backend.path_draws.items[3].kind);
     try testing.expectEqual(@as(u32, 1), backend.path_draws.items[2].uniform_index);
+    try testing.expectEqual(@as(u32, 2), backend.path_draws.items[3].uniform_index);
 }
 
 test "stencil replay clears with backend flush" {

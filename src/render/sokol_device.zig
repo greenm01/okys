@@ -43,6 +43,7 @@ pub const PathDrawKind = enum {
     stencil_even_odd,
     cover,
     convex,
+    triangles,
 };
 
 pub const PathDraw = struct {
@@ -92,6 +93,7 @@ pub const Device = struct {
     path_stencil_even_odd_pipeline: Pipeline = .{},
     path_cover_pipeline: Pipeline = .{},
     path_convex_pipeline: Pipeline = .{},
+    path_triangles_pipeline: Pipeline = .{},
     path_vertex_buffer: Buffer = .{},
     path_index_buffer: Buffer = .{},
     path_vertex_capacity: usize = 0,
@@ -157,6 +159,7 @@ pub const Device = struct {
         self.path_stencil_even_odd_pipeline = sg.makePipeline(pathPipelineDesc(self.path_stencil_shader, .stencil_even_odd));
         self.path_cover_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .cover));
         self.path_convex_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .convex));
+        self.path_triangles_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .triangles));
         self.path_vertex_buffer = sg.makeBuffer(pathVertexBufferDesc(vertex_count));
         self.path_index_buffer = sg.makeBuffer(pathIndexBufferDesc(index_count));
         self.path_vertex_capacity = vertex_count;
@@ -164,6 +167,10 @@ pub const Device = struct {
     }
 
     pub fn destroyPathResources(self: *Device) void {
+        if (self.path_triangles_pipeline.id != 0) {
+            sg.destroyPipeline(self.path_triangles_pipeline);
+            self.path_triangles_pipeline = .{};
+        }
         if (self.path_convex_pipeline.id != 0) {
             sg.destroyPipeline(self.path_convex_pipeline);
             self.path_convex_pipeline = .{};
@@ -324,7 +331,7 @@ pub const Device = struct {
             sg.applyBindings(if (indexed) indexed_bindings else vertex_bindings);
             sg.applyUniforms(path_vs_params_slot, rangeFromValue(PathVsParams, &params));
             switch (draw.kind) {
-                .cover, .convex => {
+                .cover, .convex, .triangles => {
                     const uniform_index: usize = @intCast(draw.uniform_index);
                     if (uniform_index >= frag_params.len) continue;
                     sg.applyUniforms(path_fs_params_slot, rangeFromValue(PathFsParams, &frag_params[uniform_index]));
@@ -352,6 +359,7 @@ pub const Device = struct {
             self.path_stencil_even_odd_pipeline.id == 0 or
             self.path_cover_pipeline.id == 0 or
             self.path_convex_pipeline.id == 0 or
+            self.path_triangles_pipeline.id == 0 or
             self.path_vertex_buffer.id == 0 or
             self.path_index_buffer.id == 0;
         if (!missing and self.path_vertex_capacity >= vertex_capacity and self.path_index_capacity >= index_count) {
@@ -366,6 +374,7 @@ pub const Device = struct {
             .stencil_even_odd => self.path_stencil_even_odd_pipeline,
             .cover => self.path_cover_pipeline,
             .convex => self.path_convex_pipeline,
+            .triangles => self.path_triangles_pipeline,
         };
     }
 };
@@ -560,7 +569,7 @@ fn needsIndexBuffer(draws: []const PathDraw) bool {
     for (draws) |draw| {
         switch (draw.kind) {
             .stencil_nonzero, .stencil_even_odd, .convex => return true,
-            .cover => {},
+            .cover, .triangles => {},
         }
     }
     return false;

@@ -80,7 +80,15 @@ fn appendPathDraws(
                     .uniform_index = op.uniform_index,
                 });
             },
-            .triangles => {},
+            .triangles => {
+                if (op.vertices.count == 0) continue;
+                draws.appendAssumeCapacity(.{
+                    .kind = .triangles,
+                    .base_element = op.vertices.start,
+                    .element_count = op.vertices.count,
+                    .uniform_index = op.uniform_index,
+                });
+            },
         }
     }
 }
@@ -129,7 +137,7 @@ fn countPathDraws(draw_ops: []const draw_plan.DrawOp) usize {
         switch (op.kind) {
             .stencil_fill, .convex_fill => count += @intFromBool(op.indices.count > 0),
             .cover_fill => count += @intFromBool(op.vertices.count > 0),
-            .triangles => {},
+            .triangles => count += @intFromBool(op.vertices.count > 0),
         }
     }
     return count;
