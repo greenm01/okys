@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const okys = @import("okys");
+const path = okys.types.path;
 const sokol_device = okys.render.sokol_device;
 
 test "smoke triangle carries position and color data" {
@@ -47,6 +48,114 @@ test "clear pass action clears and stores first color target" {
     try testing.expectApproxEqAbs(@as(f32, 0.2), action.colors[0].clear_value.g, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 0.3), action.colors[0].clear_value.b, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 1.0), action.colors[0].clear_value.a, 0.001);
+}
+
+test "stencil cover pass action clears color and stencil" {
+    const action = sokol_device.stencilCoverPassAction(.{ .r = 0.4, .g = 0.3, .b = 0.2, .a = 1.0 });
+
+    try testing.expectEqual(@as(@TypeOf(action.colors[0].load_action), .CLEAR), action.colors[0].load_action);
+    try testing.expectEqual(@as(@TypeOf(action.colors[0].store_action), .STORE), action.colors[0].store_action);
+    try testing.expectApproxEqAbs(@as(f32, 0.4), action.colors[0].clear_value.r, 0.001);
+    try testing.expectEqual(@as(@TypeOf(action.stencil.load_action), .CLEAR), action.stencil.load_action);
+    try testing.expectEqual(@as(@TypeOf(action.stencil.store_action), .STORE), action.stencil.store_action);
+    try testing.expectEqual(@as(u8, 0), action.stencil.clear_value);
+}
+
+test "path buffer descriptors allocate stream vertex and index buffers" {
+    const vertices = sokol_device.pathVertexBufferDesc(32);
+    const indices = sokol_device.pathIndexBufferDesc(96);
+
+    try testing.expectEqual(@as(usize, 32 * @sizeOf(path.Vertex)), vertices.size);
+    try testing.expect(vertices.usage.vertex_buffer);
+    try testing.expect(vertices.usage.stream_update);
+    try testing.expect(!vertices.usage.immutable);
+    try testing.expectEqual(@as(usize, 96 * @sizeOf(u16)), indices.size);
+    try testing.expect(indices.usage.index_buffer);
+    try testing.expect(indices.usage.stream_update);
+    try testing.expect(!indices.usage.vertex_buffer);
+}
+
+test "path bindings carry vertex and index buffer offsets" {
+    const vertex_buffer = sokol_device.Buffer{ .id = 11 };
+    const index_buffer = sokol_device.Buffer{ .id = 12 };
+
+    const vertex_only = sokol_device.pathVertexBindings(vertex_buffer, 64);
+    try testing.expectEqual(vertex_buffer, vertex_only.vertex_buffers[0]);
+    try testing.expectEqual(@as(i32, 64), vertex_only.vertex_buffer_offsets[0]);
+    try testing.expectEqual(@as(u32, 0), vertex_only.index_buffer.id);
+
+    const indexed = sokol_device.pathIndexedBindings(vertex_buffer, index_buffer, 128, 256);
+    try testing.expectEqual(vertex_buffer, indexed.vertex_buffers[0]);
+    try testing.expectEqual(index_buffer, indexed.index_buffer);
+    try testing.expectEqual(@as(i32, 128), indexed.vertex_buffer_offsets[0]);
+    try testing.expectEqual(@as(i32, 256), indexed.index_buffer_offset);
+}
+
+test "path pipeline descriptor uses path vertex layout" {
+    const shader = sokol_device.Shader{ .id = 7 };
+    const desc = sokol_device.pathPipelineDesc(shader, .cover);
+
+    try testing.expectEqual(shader, desc.shader);
+    try testing.expectEqual(@as(i32, @sizeOf(path.Vertex)), desc.layout.buffers[0].stride);
+    try testing.expectEqual(@offsetOf(path.Vertex, "x"), desc.layout.attrs[sokol_device.path_position_attr].offset);
+    try testing.expectEqual(@as(@TypeOf(desc.layout.attrs[0].format), .FLOAT2), desc.layout.attrs[sokol_device.path_position_attr].format);
+    try testing.expectEqual(@offsetOf(path.Vertex, "u"), desc.layout.attrs[sokol_device.path_uv_attr].offset);
+    try testing.expectEqual(@as(@TypeOf(desc.layout.attrs[0].format), .FLOAT2), desc.layout.attrs[sokol_device.path_uv_attr].format);
+    try testing.expectEqual(@as(@TypeOf(desc.face_winding), .CCW), desc.face_winding);
+}
+
+test "stencil path pipelines configure nonzero and even odd stencil ops" {
+    const shader = sokol_device.Shader{ .id = 7 };
+    const nonzero = sokol_device.pathPipelineDesc(shader, .stencil_nonzero);
+    const even_odd = sokol_device.pathPipelineDesc(shader, .stencil_even_odd);
+
+    try testing.expectEqual(@as(@TypeOf(nonzero.primitive_type), .TRIANGLES), nonzero.primitive_type);
+    try testing.expectEqual(@as(@TypeOf(nonzero.index_type), .UINT16), nonzero.index_type);
+    try testing.expectEqual(@as(@TypeOf(nonzero.colors[0].write_mask), .NONE), nonzero.colors[0].write_mask);
+    try testing.expect(nonzero.stencil.enabled);
+    try testing.expectEqual(@as(@TypeOf(nonzero.stencil.front.compare), .ALWAYS), nonzero.stencil.front.compare);
+    try testing.expectEqual(@as(@TypeOf(nonzero.stencil.front.pass_op), .INCR_WRAP), nonzero.stencil.front.pass_op);
+    try testing.expectEqual(@as(@TypeOf(nonzero.stencil.back.pass_op), .DECR_WRAP), nonzero.stencil.back.pass_op);
+    try testing.expectEqual(@as(u8, 0xff), nonzero.stencil.read_mask);
+    try testing.expectEqual(@as(u8, 0xff), nonzero.stencil.write_mask);
+
+    try testing.expectEqual(@as(@TypeOf(even_odd.index_type), .UINT16), even_odd.index_type);
+    try testing.expect(even_odd.stencil.enabled);
+    try testing.expectEqual(@as(@TypeOf(even_odd.stencil.front.pass_op), .INVERT), even_odd.stencil.front.pass_op);
+    try testing.expectEqual(@as(@TypeOf(even_odd.stencil.back.pass_op), .INVERT), even_odd.stencil.back.pass_op);
+}
+
+test "cover path pipeline reads and clears stencil while blending color" {
+    const shader = sokol_device.Shader{ .id = 7 };
+    const desc = sokol_device.pathPipelineDesc(shader, .cover);
+
+    try testing.expectEqual(@as(@TypeOf(desc.primitive_type), .TRIANGLE_STRIP), desc.primitive_type);
+    try testing.expectEqual(@as(@TypeOf(desc.index_type), .DEFAULT), desc.index_type);
+    try testing.expect(desc.stencil.enabled);
+    try testing.expectEqual(@as(@TypeOf(desc.stencil.front.compare), .NOT_EQUAL), desc.stencil.front.compare);
+    try testing.expectEqual(@as(@TypeOf(desc.stencil.front.pass_op), .ZERO), desc.stencil.front.pass_op);
+    try testing.expectEqual(@as(@TypeOf(desc.stencil.back.pass_op), .ZERO), desc.stencil.back.pass_op);
+    try testing.expect(desc.colors[0].blend.enabled);
+    try testing.expectEqual(@as(@TypeOf(desc.colors[0].blend.src_factor_rgb), .SRC_ALPHA), desc.colors[0].blend.src_factor_rgb);
+    try testing.expectEqual(@as(@TypeOf(desc.colors[0].blend.dst_factor_rgb), .ONE_MINUS_SRC_ALPHA), desc.colors[0].blend.dst_factor_rgb);
+    try testing.expectEqual(@as(@TypeOf(desc.colors[0].blend.src_factor_alpha), .ONE), desc.colors[0].blend.src_factor_alpha);
+    try testing.expectEqual(@as(@TypeOf(desc.colors[0].blend.dst_factor_alpha), .ONE_MINUS_SRC_ALPHA), desc.colors[0].blend.dst_factor_alpha);
+}
+
+test "direct path pipelines blend without stencil" {
+    const shader = sokol_device.Shader{ .id = 7 };
+    const convex = sokol_device.pathPipelineDesc(shader, .convex);
+    const triangles = sokol_device.pathPipelineDesc(shader, .triangles);
+
+    try testing.expectEqual(@as(@TypeOf(convex.primitive_type), .TRIANGLES), convex.primitive_type);
+    try testing.expectEqual(@as(@TypeOf(convex.index_type), .UINT16), convex.index_type);
+    try testing.expect(!convex.stencil.enabled);
+    try testing.expect(convex.colors[0].blend.enabled);
+
+    try testing.expectEqual(@as(@TypeOf(triangles.primitive_type), .TRIANGLES), triangles.primitive_type);
+    try testing.expectEqual(@as(@TypeOf(triangles.index_type), .DEFAULT), triangles.index_type);
+    try testing.expect(!triangles.stencil.enabled);
+    try testing.expect(triangles.colors[0].blend.enabled);
 }
 
 test "attached device records pixel viewport dimensions" {
