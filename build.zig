@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const with_nim_smoke = b.option(bool, "with-nim-smoke", "Run the Nim ABI smoke test as part of `zig build test`") orelse false;
 
     const okys_mod = b.createModule(.{
         .root_source_file = b.path("src/okys.zig"),
@@ -64,4 +65,25 @@ pub fn build(b: *std.Build) void {
     });
     const run_abi_smoke = b.addRunArtifact(abi_smoke);
     test_step.dependOn(&run_abi_smoke.step);
+
+    const nim_smoke = b.addSystemCommand(&.{
+        "nim",
+        "c",
+        "-r",
+        "--hints:off",
+        "--verbosity:0",
+        "--nimcache:.zig-cache/nim_abi_smoke",
+        "--passC:-Iinclude",
+        "--passL:zig-out/lib/libokys.a",
+        "--out:zig-out/nim_abi_smoke",
+        "tests/nim_abi_smoke.nim",
+    });
+    nim_smoke.step.dependOn(b.getInstallStep());
+
+    const nim_smoke_step = b.step("nim-smoke", "Run the Nim binding smoke test");
+    nim_smoke_step.dependOn(&nim_smoke.step);
+
+    if (with_nim_smoke) {
+        test_step.dependOn(&nim_smoke.step);
+    }
 }
