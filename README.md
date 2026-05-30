@@ -14,10 +14,18 @@ drawing library can't avoid.
 The stencil-then-cover backend (NanoVG's approach) comes first. It's there to
 get the rest of the library working — ABI, bindings, paint shaders, scissor,
 transforms, buffer management — before the tiled rasterizer goes in, and it
-stays as a fallback for targets without compute shaders, such as WebGL2.
+stays as a fallback for targets without compute shaders.
 
 The front-end is NanoVG's API, reimplemented in Zig rather than ported. The C
 header is hand-written and is the source of truth for the ABI.
+
+## Platforms
+
+Desktop is the target. sokol picks the native backend per platform — Metal on
+macOS, D3D11 on Windows, Vulkan or GL on Linux — all of which have the compute
+support the tiled rasterizer needs. The browser is secondary: sokol's default
+web build is WebGL2, which has no compute, so the tiled rasterizer there needs
+sokol's WebGPU backend; on WebGL2 it falls back to stencil-then-cover.
 
 ## Build
 
