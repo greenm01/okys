@@ -38,6 +38,7 @@ test "all production modules analyze" {
     _ = okys.systems.backend_a;
     _ = okys.systems.backend_b;
     _ = okys.render.interface;
+    _ = okys.render.sokol_device;
     _ = okys.c_api;
 }
 

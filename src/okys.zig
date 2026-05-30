@@ -38,6 +38,7 @@ pub const systems = struct {
 
 pub const render = struct {
     pub const interface = @import("render/interface.zig");
+    pub const sokol_device = @import("render/sokol_device.zig");
 };
 
 pub const c_api = @import("c_api.zig");
