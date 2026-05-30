@@ -56,14 +56,3 @@ pub const Context = struct {
         return &self.states.items[self.states.items.len - 1];
     }
 };
-
-// ===== production code above =====
-
-const testing = std.testing;
-
-test "create installs one default state and destroy frees it" {
-    const ctx = try Context.create(testing.allocator, 0);
-    defer ctx.destroy();
-    try testing.expectEqual(@as(usize, 1), ctx.states.items.len);
-    try testing.expectEqual(@as(f32, 1.0), ctx.state().alpha);
-}

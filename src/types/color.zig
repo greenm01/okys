@@ -70,20 +70,3 @@ pub fn solid(c: Color) Paint {
         .image = 0,
     };
 }
-
-// ===== production code above =====
-
-const testing = std.testing;
-
-test "rgba maps 0..255 to 0..1" {
-    const c = rgba(255, 0, 128, 255);
-    try testing.expectApproxEqAbs(@as(f32, 1.0), c.r, 0.001);
-    try testing.expectEqual(@as(f32, 0.0), c.g);
-    try testing.expectApproxEqAbs(@as(f32, 128.0 / 255.0), c.b, 0.001);
-}
-
-test "solid paint carries the color in both stops" {
-    const p = solid(rgbaf(0.25, 0.5, 0.75, 1.0));
-    try testing.expectEqual(p.inner_color, p.outer_color);
-    try testing.expectApproxEqAbs(@as(f32, 0.5), p.inner_color.g, 0.001);
-}

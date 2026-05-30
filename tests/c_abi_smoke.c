@@ -21,12 +21,52 @@ int main(void) {
     okyBeginFrame(ctx, 800.0f, 600.0f, 1.0f);
 
     okySave(ctx);
+    okyStrokeWidth(ctx, 2.0f);
+    okyMiterLimit(ctx, 4.0f);
+    okyLineCap(ctx, OKY_ROUND);
+    okyLineJoin(ctx, OKY_BEVEL);
+    okyGlobalAlpha(ctx, 0.75f);
+
+    okyTranslate(ctx, 10.0f, 20.0f);
+    okyRotate(ctx, 0.1f);
+    okyScale(ctx, 2.0f, 2.0f);
+    okySkewX(ctx, 0.05f);
+    okySkewY(ctx, -0.02f);
+    okyTransform(ctx, 1.0f, 0.0f, 0.0f, 1.0f, 3.0f, 4.0f);
+    OKYtransform current;
+    okyCurrentTransform(ctx, current);
+    okyResetTransform(ctx);
+
+    OKYpaint lg = okyLinearGradient(ctx, 0.0f, 0.0f, 100.0f, 0.0f, red,
+                                    okyRGBAf(0.0f, 0.0f, 1.0f, 1.0f));
+    OKYpaint rg = okyRadialGradient(ctx, 50.0f, 50.0f, 5.0f, 20.0f, red, red);
+    OKYpaint bg =
+        okyBoxGradient(ctx, 0.0f, 0.0f, 100.0f, 80.0f, 5.0f, 10.0f, red, red);
+    OKYpaint ip =
+        okyImagePattern(ctx, 0.0f, 0.0f, 32.0f, 32.0f, 0.0f, 7, 0.5f);
+    assert(lg.feather >= 1.0f && rg.radius > 0.0f && bg.extent[0] > 0.0f);
+    assert(ip.image == 7);
+    okyFillPaint(ctx, lg);
+    okyStrokePaint(ctx, rg);
+    okyScissor(ctx, 0.0f, 0.0f, 200.0f, 200.0f);
+    okyIntersectScissor(ctx, 50.0f, 50.0f, 100.0f, 100.0f);
+    okyResetScissor(ctx);
+
     okyBeginPath(ctx);
     okyRect(ctx, 10.0f, 10.0f, 100.0f, 100.0f);
     okyMoveTo(ctx, 0.0f, 0.0f);
     okyLineTo(ctx, 50.0f, 50.0f);
     okyBezierTo(ctx, 10.0f, 10.0f, 20.0f, 20.0f, 30.0f, 30.0f);
+    okyQuadTo(ctx, 40.0f, 40.0f, 50.0f, 20.0f);
+    okyArcTo(ctx, 60.0f, 20.0f, 80.0f, 40.0f, 5.0f);
+    okyArc(ctx, 80.0f, 80.0f, 10.0f, 0.0f, 3.14159265f, OKY_CW);
+    okyPathWinding(ctx, OKY_CW);
     okyClosePath(ctx);
+    okyRoundedRect(ctx, 10.0f, 10.0f, 60.0f, 40.0f, 4.0f);
+    okyRoundedRectVarying(ctx, 10.0f, 10.0f, 60.0f, 40.0f, 1.0f, 2.0f,
+                          3.0f, 4.0f);
+    okyEllipse(ctx, 30.0f, 30.0f, 10.0f, 20.0f);
+    okyCircle(ctx, 30.0f, 30.0f, 10.0f);
     okyFillColor(ctx, okyRGBAf(0.2f, 0.4f, 0.8f, 1.0f));
     okyStrokeColor(ctx, red);
     okyFill(ctx);

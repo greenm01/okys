@@ -4,8 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Internal Zig root module. Used by the unit-test build so every module in
-    // the tree is compiled and its comptime assertions run.
     const okys_mod = b.createModule(.{
         .root_source_file = b.path("src/okys.zig"),
         .target = target,
@@ -30,8 +28,16 @@ pub fn build(b: *std.Build) void {
     lib.installHeader(b.path("include/okys.h"), "okys.h");
     b.installArtifact(lib);
 
-    // Unit tests: in-file `test` blocks across the whole tree.
-    const unit_tests = b.addTest(.{ .root_module = okys_mod });
+    // Unit tests live outside production code. tests/unit.zig imports the
+    // production modules so their comptime assertions still run.
+    const unit_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    unit_mod.addImport("okys", okys_mod);
+    const unit_tests = b.addTest(.{ .root_module = unit_mod });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const test_step = b.step("test", "Run unit tests and the C ABI smoke test");
