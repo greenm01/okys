@@ -14,51 +14,35 @@ const path = @import("../../types/path.zig");
 const PathRange = path.PathRange;
 const Point = path.Point;
 const Vertex = path.Vertex;
-const Winding = path.Winding;
 const RenderInterface = @import("../../render/interface.zig").RenderInterface;
+pub const draw_plan = @import("draw_plan.zig");
 
 pub const max_vertices: usize = 65535;
 
-pub const CallType = enum {
-    fill,
-    fill_convex,
-    stroke,
-    triangles,
-};
-
-pub const Range = struct {
-    start: u32 = 0,
-    count: u32 = 0,
-};
-
-pub const QueuedPath = struct {
-    vertices: Range = .{},
-    winding: Winding = .ccw,
-    closed: bool = false,
-    convex: bool = false,
-};
-
-pub const Call = struct {
-    call_type: CallType,
-    paint: Paint,
-    scissor: Scissor,
-    bounds: [4]f32 = .{ 0, 0, 0, 0 },
-    width: f32 = 0,
-    paths: Range = .{},
-    vertices: Range = .{},
-    cover: Range = .{},
-};
+pub const CallType = draw_plan.CallType;
+pub const DrawOp = draw_plan.DrawOp;
+pub const DrawOpKind = draw_plan.DrawOpKind;
+pub const FillRule = draw_plan.FillRule;
+pub const PaintUniform = draw_plan.PaintUniform;
+pub const Primitive = draw_plan.Primitive;
+pub const Range = draw_plan.Range;
+pub const StencilMode = draw_plan.StencilMode;
+pub const QueuedPath = draw_plan.QueuedPath;
+pub const Call = draw_plan.Call;
 
 pub const Backend = struct {
     gpa: std.mem.Allocator,
     calls: std.ArrayList(Call) = .empty,
     paths: std.ArrayList(QueuedPath) = .empty,
     vertices: std.ArrayList(Vertex) = .empty,
+    uniforms: std.ArrayList(PaintUniform) = .empty,
+    draw_ops: std.ArrayList(DrawOp) = .empty,
     textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
 
     viewport_width: f32 = 0,
     viewport_height: f32 = 0,
     viewport_dpr: f32 = 1,
+    fill_rule: FillRule = .nonzero,
     flush_count: usize = 0,
 
     pub fn create(gpa: std.mem.Allocator) !*Backend {
@@ -72,6 +56,8 @@ pub const Backend = struct {
         self.calls.deinit(gpa);
         self.paths.deinit(gpa);
         self.vertices.deinit(gpa);
+        self.uniforms.deinit(gpa);
+        self.draw_ops.deinit(gpa);
         self.textures.deinit(gpa);
         gpa.destroy(self);
     }
@@ -93,10 +79,26 @@ pub const Backend = struct {
     }
 
     pub fn flush(self: *Backend) void {
+        _ = self.buildDrawPlan();
         self.flush_count += 1;
         self.calls.clearRetainingCapacity();
         self.paths.clearRetainingCapacity();
         self.vertices.clearRetainingCapacity();
+        self.uniforms.clearRetainingCapacity();
+        self.draw_ops.clearRetainingCapacity();
+    }
+
+    pub fn buildDrawPlan(self: *Backend) bool {
+        draw_plan.build(
+            self.gpa,
+            self.calls.items,
+            self.paths.items,
+            self.vertices.items,
+            self.fill_rule,
+            &self.uniforms,
+            &self.draw_ops,
+        ) catch return false;
+        return true;
     }
 
     fn queueFill(self: *Backend, paint: *const Paint, scissor: *const Scissor, bounds: [4]f32, input_paths: []const PathRange, points: []const Point) void {
