@@ -96,13 +96,17 @@ test "path pipeline descriptor uses path vertex layout" {
     const desc = sokol_device.pathPipelineDesc(shader, .cover);
 
     try testing.expectEqual(@as(usize, 16), @sizeOf(sokol_device.PathVsParams));
+    try testing.expectEqual(@as(usize, 176), @sizeOf(sokol_device.PathFsParams));
     try testing.expectEqual(@as(usize, 0), sokol_device.path_vs_params_slot);
+    try testing.expectEqual(@as(usize, 1), sokol_device.path_fs_params_slot);
     try testing.expectEqual(shader, desc.shader);
     try testing.expectEqual(@as(i32, @sizeOf(path.Vertex)), desc.layout.buffers[0].stride);
     try testing.expectEqual(@offsetOf(path.Vertex, "x"), desc.layout.attrs[sokol_device.path_position_attr].offset);
     try testing.expectEqual(@as(@TypeOf(desc.layout.attrs[0].format), .FLOAT2), desc.layout.attrs[sokol_device.path_position_attr].format);
     try testing.expectEqual(@offsetOf(path.Vertex, "u"), desc.layout.attrs[sokol_device.path_uv_attr].offset);
     try testing.expectEqual(@as(@TypeOf(desc.layout.attrs[0].format), .FLOAT2), desc.layout.attrs[sokol_device.path_uv_attr].format);
+    try testing.expectEqual(@offsetOf(path.Vertex, "x"), desc.layout.attrs[sokol_device.path_cover_position_attr].offset);
+    try testing.expectEqual(@offsetOf(path.Vertex, "u"), desc.layout.attrs[sokol_device.path_cover_uv_attr].offset);
     try testing.expectEqual(@as(@TypeOf(desc.face_winding), .CCW), desc.face_winding);
 }
 

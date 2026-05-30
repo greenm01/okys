@@ -32,6 +32,8 @@ pub const StencilMode = draw_plan.StencilMode;
 pub const QueuedPath = draw_plan.QueuedPath;
 pub const Call = draw_plan.Call;
 pub const StencilDraw = @import("../../render/sokol_device.zig").StencilDraw;
+pub const CoverDraw = @import("../../render/sokol_device.zig").CoverDraw;
+pub const PathFsParams = @import("../../render/sokol_device.zig").PathFsParams;
 
 pub const Backend = struct {
     gpa: std.mem.Allocator,
@@ -42,6 +44,8 @@ pub const Backend = struct {
     uniforms: std.ArrayList(PaintUniform) = .empty,
     draw_ops: std.ArrayList(DrawOp) = .empty,
     stencil_draws: std.ArrayList(StencilDraw) = .empty,
+    cover_draws: std.ArrayList(CoverDraw) = .empty,
+    frag_params: std.ArrayList(PathFsParams) = .empty,
     textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
 
     viewport_width: f32 = 0,
@@ -65,6 +69,8 @@ pub const Backend = struct {
         self.uniforms.deinit(gpa);
         self.draw_ops.deinit(gpa);
         self.stencil_draws.deinit(gpa);
+        self.cover_draws.deinit(gpa);
+        self.frag_params.deinit(gpa);
         self.textures.deinit(gpa);
         gpa.destroy(self);
     }
@@ -95,6 +101,8 @@ pub const Backend = struct {
         self.uniforms.clearRetainingCapacity();
         self.draw_ops.clearRetainingCapacity();
         self.stencil_draws.clearRetainingCapacity();
+        self.cover_draws.clearRetainingCapacity();
+        self.frag_params.clearRetainingCapacity();
     }
 
     pub fn buildDrawPlan(self: *Backend) bool {
@@ -112,10 +120,13 @@ pub const Backend = struct {
 
     pub fn buildStencilPass(self: *Backend) bool {
         if (!self.buildDrawPlan()) return false;
-        replay.buildStencilDraws(
+        replay.build(
             self.gpa,
             self.draw_ops.items,
+            self.uniforms.items,
             &self.stencil_draws,
+            &self.cover_draws,
+            &self.frag_params,
         ) catch return false;
         return true;
     }

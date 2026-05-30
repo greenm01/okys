@@ -21,10 +21,14 @@ pub const PipelineDesc = sg.PipelineDesc;
 pub const smoke_position_attr = smoke_shader.ATTR_smoke_position;
 pub const smoke_color_attr = smoke_shader.ATTR_smoke_color0;
 
-pub const path_position_attr = path_shader.ATTR_path_position;
-pub const path_uv_attr = path_shader.ATTR_path_uv;
+pub const path_position_attr = path_shader.ATTR_path_stencil_position;
+pub const path_uv_attr = path_shader.ATTR_path_stencil_uv;
+pub const path_cover_position_attr = path_shader.ATTR_path_cover_position;
+pub const path_cover_uv_attr = path_shader.ATTR_path_cover_uv;
 pub const path_vs_params_slot = path_shader.UB_vs_params;
+pub const path_fs_params_slot = path_shader.UB_fs_params;
 pub const PathVsParams = path_shader.VsParams;
+pub const PathFsParams = path_shader.FsParams;
 
 pub const PathPipelineKind = enum {
     stencil_nonzero,
@@ -38,6 +42,12 @@ pub const StencilDraw = struct {
     mode: PathPipelineKind,
     base_element: u32,
     element_count: u32,
+};
+
+pub const CoverDraw = struct {
+    base_element: u32,
+    element_count: u32,
+    uniform_index: u32,
 };
 
 pub const SmokeVertex = extern struct {
@@ -62,9 +72,11 @@ pub const Device = struct {
     smoke_pipeline: Pipeline = .{},
     smoke_vertices: Buffer = .{},
     smoke_bindings: Bindings = .{},
-    path_shader: Shader = .{},
+    path_stencil_shader: Shader = .{},
+    path_cover_shader: Shader = .{},
     path_stencil_nonzero_pipeline: Pipeline = .{},
     path_stencil_even_odd_pipeline: Pipeline = .{},
+    path_cover_pipeline: Pipeline = .{},
     path_vertex_buffer: Buffer = .{},
     path_index_buffer: Buffer = .{},
     path_vertex_capacity: usize = 0,
@@ -122,16 +134,24 @@ pub const Device = struct {
 
     pub fn createPathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
         self.destroyPathResources();
-        self.path_shader = sg.makeShader(path_shader.pathShaderDesc(sg.queryBackend()));
-        self.path_stencil_nonzero_pipeline = sg.makePipeline(pathPipelineDesc(self.path_shader, .stencil_nonzero));
-        self.path_stencil_even_odd_pipeline = sg.makePipeline(pathPipelineDesc(self.path_shader, .stencil_even_odd));
-        self.path_vertex_buffer = sg.makeBuffer(pathVertexBufferDesc(vertex_capacity));
-        self.path_index_buffer = sg.makeBuffer(pathIndexBufferDesc(index_capacity));
-        self.path_vertex_capacity = vertex_capacity;
-        self.path_index_capacity = index_capacity;
+        const vertex_count = @max(vertex_capacity, 1);
+        const index_count = @max(index_capacity, 1);
+        self.path_stencil_shader = sg.makeShader(path_shader.pathStencilShaderDesc(sg.queryBackend()));
+        self.path_cover_shader = sg.makeShader(path_shader.pathCoverShaderDesc(sg.queryBackend()));
+        self.path_stencil_nonzero_pipeline = sg.makePipeline(pathPipelineDesc(self.path_stencil_shader, .stencil_nonzero));
+        self.path_stencil_even_odd_pipeline = sg.makePipeline(pathPipelineDesc(self.path_stencil_shader, .stencil_even_odd));
+        self.path_cover_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .cover));
+        self.path_vertex_buffer = sg.makeBuffer(pathVertexBufferDesc(vertex_count));
+        self.path_index_buffer = sg.makeBuffer(pathIndexBufferDesc(index_count));
+        self.path_vertex_capacity = vertex_count;
+        self.path_index_capacity = index_count;
     }
 
     pub fn destroyPathResources(self: *Device) void {
+        if (self.path_cover_pipeline.id != 0) {
+            sg.destroyPipeline(self.path_cover_pipeline);
+            self.path_cover_pipeline = .{};
+        }
         if (self.path_stencil_even_odd_pipeline.id != 0) {
             sg.destroyPipeline(self.path_stencil_even_odd_pipeline);
             self.path_stencil_even_odd_pipeline = .{};
@@ -140,9 +160,13 @@ pub const Device = struct {
             sg.destroyPipeline(self.path_stencil_nonzero_pipeline);
             self.path_stencil_nonzero_pipeline = .{};
         }
-        if (self.path_shader.id != 0) {
-            sg.destroyShader(self.path_shader);
-            self.path_shader = .{};
+        if (self.path_cover_shader.id != 0) {
+            sg.destroyShader(self.path_cover_shader);
+            self.path_cover_shader = .{};
+        }
+        if (self.path_stencil_shader.id != 0) {
+            sg.destroyShader(self.path_stencil_shader);
+            self.path_stencil_shader = .{};
         }
         if (self.path_vertex_buffer.id != 0) {
             sg.destroyBuffer(self.path_vertex_buffer);
@@ -191,24 +215,55 @@ pub const Device = struct {
         view_width: f32,
         view_height: f32,
     ) void {
-        if (draws.len == 0 or vertices.len == 0 or indices.len == 0) return;
+        self.drawStencilCoverPass(pass, vertices, indices, draws, &.{}, &.{}, view_width, view_height);
+    }
+
+    pub fn drawStencilCoverPass(
+        self: *Device,
+        pass: Pass,
+        vertices: []const path.Vertex,
+        indices: []const u16,
+        stencil_draws: []const StencilDraw,
+        cover_draws: []const CoverDraw,
+        frag_params: []const PathFsParams,
+        view_width: f32,
+        view_height: f32,
+    ) void {
+        if (vertices.len == 0 or (stencil_draws.len == 0 and cover_draws.len == 0)) return;
+        if (stencil_draws.len > 0 and indices.len == 0) return;
         self.ensurePathResources(vertices.len, indices.len);
 
         sg.updateBuffer(self.path_vertex_buffer, rangeFromSlice(path.Vertex, vertices));
-        sg.updateBuffer(self.path_index_buffer, rangeFromSlice(u16, indices));
+        if (indices.len > 0) {
+            sg.updateBuffer(self.path_index_buffer, rangeFromSlice(u16, indices));
+        }
 
         self.beginPass(pass);
         const params = pathVsParams(view_width, view_height);
-        const bindings = pathIndexedBindings(self.path_vertex_buffer, self.path_index_buffer, 0, 0);
+        const indexed_bindings = pathIndexedBindings(self.path_vertex_buffer, self.path_index_buffer, 0, 0);
+        const vertex_bindings = pathVertexBindings(self.path_vertex_buffer, 0);
 
-        for (draws) |draw| {
+        for (stencil_draws) |draw| {
             if (draw.element_count == 0) continue;
             const pipeline = self.stencilPipeline(draw.mode);
             if (pipeline.id == 0) continue;
             sg.applyPipeline(pipeline);
-            sg.applyBindings(bindings);
+            sg.applyBindings(indexed_bindings);
             sg.applyUniforms(path_vs_params_slot, rangeFromValue(PathVsParams, &params));
             sg.draw(draw.base_element, draw.element_count, 1);
+        }
+
+        if (self.path_cover_pipeline.id != 0) {
+            for (cover_draws) |draw| {
+                if (draw.element_count == 0) continue;
+                const uniform_index: usize = @intCast(draw.uniform_index);
+                if (uniform_index >= frag_params.len) continue;
+                sg.applyPipeline(self.path_cover_pipeline);
+                sg.applyBindings(vertex_bindings);
+                sg.applyUniforms(path_vs_params_slot, rangeFromValue(PathVsParams, &params));
+                sg.applyUniforms(path_fs_params_slot, rangeFromValue(PathFsParams, &frag_params[uniform_index]));
+                sg.draw(draw.base_element, draw.element_count, 1);
+            }
         }
 
         sg.endPass();
@@ -222,15 +277,18 @@ pub const Device = struct {
     }
 
     fn ensurePathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
-        const missing = self.path_shader.id == 0 or
+        const index_count = @max(index_capacity, 1);
+        const missing = self.path_stencil_shader.id == 0 or
+            self.path_cover_shader.id == 0 or
             self.path_stencil_nonzero_pipeline.id == 0 or
             self.path_stencil_even_odd_pipeline.id == 0 or
+            self.path_cover_pipeline.id == 0 or
             self.path_vertex_buffer.id == 0 or
             self.path_index_buffer.id == 0;
-        if (!missing and self.path_vertex_capacity >= vertex_capacity and self.path_index_capacity >= index_capacity) {
+        if (!missing and self.path_vertex_capacity >= vertex_capacity and self.path_index_capacity >= index_count) {
             return;
         }
-        self.createPathResources(vertex_capacity, index_capacity);
+        self.createPathResources(vertex_capacity, index_count);
     }
 
     fn stencilPipeline(self: *const Device, mode: PathPipelineKind) Pipeline {
