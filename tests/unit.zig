@@ -2,10 +2,12 @@ const std = @import("std");
 const testing = std.testing;
 
 const okys = @import("okys");
+const mock_backend = @import("mock_backend.zig");
 const color = okys.types.color;
 const Context = okys.state.context.Context;
 const paint_ops = okys.ops.paint;
 const path_ops = okys.ops.path;
+const render_ops = okys.ops.render;
 const state_ops = okys.ops.state;
 const frame_ops = okys.ops.frame;
 const flatten = okys.systems.flatten;
@@ -26,6 +28,7 @@ test "all production modules analyze" {
     _ = okys.ops.frame;
     _ = okys.ops.path;
     _ = okys.ops.paint;
+    _ = okys.ops.render;
     _ = okys.ops.state;
     _ = okys.ops.image;
     _ = okys.systems.transform;
@@ -427,6 +430,130 @@ test "degenerate stroke inputs produce no outline" {
     path_ops.moveTo(ctx, 0, 0);
     stroke.buildOutline(ctx);
     try testing.expectEqual(@as(usize, 0), ctx.stroke_outline.paths.items.len);
+}
+
+test "backend receives viewport flush and deinit lifecycle calls" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, 0);
+    ctx.backend = backend.interface();
+
+    frame_ops.beginFrame(ctx, 320, 240, 2);
+    try testing.expectEqual(@as(usize, 1), backend.viewport_calls);
+    try testing.expectApproxEqAbs(@as(f32, 320), backend.viewport_width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 240), backend.viewport_height, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 2), backend.viewport_dpr, 0.001);
+
+    frame_ops.endFrame(ctx);
+    try testing.expectEqual(@as(usize, 1), backend.flush_calls);
+
+    ctx.destroy();
+    try testing.expectEqual(@as(usize, 1), backend.deinit_calls);
+}
+
+test "fill records flattened geometry and style snapshots" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    ctx.backend = backend.interface();
+
+    paint_ops.fillColor(ctx, color.rgbaf(0.25, 0.5, 0.75, 0.8));
+    state_ops.save(ctx);
+    paint_ops.fillColor(ctx, color.rgbaf(1, 0, 0, 1));
+    state_ops.restore(ctx);
+    state_ops.scissor(ctx, 2, 4, 30, 40);
+    path_ops.beginPath(ctx);
+    path_ops.rect(ctx, 10, 20, 30, 40);
+
+    render_ops.fill(ctx);
+
+    try testing.expectEqual(@as(usize, 1), backend.fill_calls);
+    try testing.expectEqual(@as(usize, 1), backend.last_fill.path_count);
+    try testing.expectEqual(@as(usize, 4), backend.last_fill.point_count);
+    try testing.expectEqual(@intFromPtr(ctx.cache.paths.items.ptr), backend.last_fill.paths_ptr);
+    try testing.expectEqual(@intFromPtr(ctx.cache.points.items.ptr), backend.last_fill.points_ptr);
+    try testing.expectApproxEqAbs(@as(f32, 10), backend.last_fill.bounds[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 20), backend.last_fill.bounds[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 40), backend.last_fill.bounds[2], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 60), backend.last_fill.bounds[3], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), backend.last_fill.paint.inner_color.r, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), backend.last_fill.paint.inner_color.g, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 15), backend.last_fill.scissor.extent[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 20), backend.last_fill.scissor.extent[1], 0.001);
+
+    paint_ops.fillColor(ctx, color.rgbaf(1, 0, 0, 1));
+    state_ops.resetScissor(ctx);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), backend.last_fill.paint.inner_color.r, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 15), backend.last_fill.scissor.extent[0], 0.001);
+}
+
+test "stroke records shared outline geometry and style snapshots" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    ctx.backend = backend.interface();
+
+    state_ops.strokeWidth(ctx, 10);
+    state_ops.lineCap(ctx, .round);
+    paint_ops.strokeColor(ctx, color.rgbaf(0.1, 0.2, 0.3, 0.4));
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 20, 0);
+
+    render_ops.stroke(ctx);
+
+    try testing.expectEqual(@as(usize, 1), backend.stroke_calls);
+    try testing.expectEqual(@intFromPtr(ctx.stroke_outline.paths.items.ptr), backend.last_stroke.paths_ptr);
+    try testing.expectEqual(@intFromPtr(ctx.stroke_outline.points.items.ptr), backend.last_stroke.points_ptr);
+    try testing.expect(backend.last_stroke.path_count > 0);
+    try testing.expect(backend.last_stroke.point_count > ctx.cache.points.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 10), backend.last_stroke.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.2), backend.last_stroke.paint.inner_color.g, 0.001);
+
+    paint_ops.strokeColor(ctx, color.rgbaf(1, 1, 1, 1));
+    state_ops.strokeWidth(ctx, 1);
+    try testing.expectApproxEqAbs(@as(f32, 0.2), backend.last_stroke.paint.inner_color.g, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 10), backend.last_stroke.width, 0.001);
+}
+
+test "empty draw calls and no backend do not emit render calls" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    ctx.backend = backend.interface();
+
+    render_ops.fill(ctx);
+    render_ops.stroke(ctx);
+    try testing.expectEqual(@as(usize, 0), backend.fill_calls);
+    try testing.expectEqual(@as(usize, 0), backend.stroke_calls);
+
+    ctx.backend = null;
+    path_ops.beginPath(ctx);
+    path_ops.rect(ctx, 0, 0, 10, 10);
+    render_ops.fill(ctx);
+    try testing.expectEqual(@as(usize, 1), ctx.cache.paths.items.len);
+}
+
+test "cancel frame clears transient draw data without flushing" {
+    var backend: mock_backend.MockBackend = .{};
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    ctx.backend = backend.interface();
+
+    path_ops.beginPath(ctx);
+    path_ops.rect(ctx, 0, 0, 10, 10);
+    render_ops.fill(ctx);
+    state_ops.strokeWidth(ctx, 2);
+    render_ops.stroke(ctx);
+
+    try testing.expect(ctx.commands.data.items.len > 0);
+    try testing.expect(ctx.cache.paths.items.len > 0);
+    try testing.expect(ctx.stroke_outline.paths.items.len > 0);
+
+    frame_ops.cancelFrame(ctx);
+    try testing.expectEqual(@as(usize, 0), ctx.commands.data.items.len);
+    try testing.expectEqual(@as(usize, 0), ctx.cache.paths.items.len);
+    try testing.expectEqual(@as(usize, 0), ctx.stroke_outline.paths.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.flush_calls);
 }
 
 fn polyArea(pts: []const okys.types.path.Point) f32 {

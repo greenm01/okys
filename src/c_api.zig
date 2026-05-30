@@ -16,6 +16,7 @@ const Winding = @import("types/path.zig").Winding;
 const frame = @import("ops/frame_ops.zig");
 const paths = @import("ops/path_ops.zig");
 const paint = @import("ops/paint_ops.zig");
+const render_ops = @import("ops/render_ops.zig");
 const state_ops = @import("ops/state_ops.zig");
 
 const version_string = "0.0.0";
@@ -250,13 +251,11 @@ export fn okyCircle(ctx: ?*Context, cx: f32, cy: f32, r: f32) void {
 // --- render ----------------------------------------------------------------
 
 export fn okyFill(ctx: ?*Context) void {
-    _ = ctx;
-    // TODO: flatten, then hand the polylines to the backend's fill.
+    if (ctx) |c| render_ops.fill(c);
 }
 
 export fn okyStroke(ctx: ?*Context) void {
-    _ = ctx;
-    // TODO: flatten, then hand the outline to the backend's stroke.
+    if (ctx) |c| render_ops.stroke(c);
 }
 
 fn lineCapFromInt(cap: c_int) LineCap {

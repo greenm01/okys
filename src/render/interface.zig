@@ -1,6 +1,6 @@
-//! The render interface. Flattened polylines, paint, and scissor cross here;
-//! never expanded meshes. Both backends implement this vtable; the front-end
-//! never knows which one is live.
+//! The render interface. Fill paths cross as flattened polylines; strokes cross
+//! as shared outline polygons. Both backends implement this vtable; the
+//! front-end never knows which one is live.
 
 const color = @import("../types/color.zig");
 const Paint = color.Paint;
@@ -25,7 +25,7 @@ pub const RenderInterface = struct {
     flush: *const fn (ctx: *anyopaque) void,
     deinit: *const fn (ctx: *anyopaque) void,
 
-    // draw — flattened polylines cross here, not meshes
+    // draw — paths cross here before backend-specific tessellation or coverage.
     fill: *const fn (ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, bounds: [4]f32, paths: []const PathRange, points: []const Point) void,
     stroke: *const fn (ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, width: f32, paths: []const PathRange, points: []const Point) void,
     triangles: *const fn (ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, verts: []const Vertex) void,

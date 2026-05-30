@@ -22,6 +22,7 @@ pub const ops = struct {
     pub const frame = @import("ops/frame_ops.zig");
     pub const path = @import("ops/path_ops.zig");
     pub const paint = @import("ops/paint_ops.zig");
+    pub const render = @import("ops/render_ops.zig");
     pub const state = @import("ops/state_ops.zig");
     pub const image = @import("ops/image_ops.zig");
 };

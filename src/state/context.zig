@@ -46,6 +46,7 @@ pub const Context = struct {
 
     pub fn destroy(self: *Context) void {
         const gpa = self.gpa;
+        if (self.backend) |b| b.deinit(b.ctx);
         self.commands.deinit(gpa);
         self.states.deinit(gpa);
         self.cache.deinit(gpa);
