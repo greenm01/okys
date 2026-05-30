@@ -4,6 +4,7 @@
 const sokol = @import("sokol");
 const sg = sokol.gfx;
 const path = @import("../types/path.zig");
+const path_shader = @import("okys_path_shader");
 const smoke_shader = @import("okys_shader");
 
 pub const Desc = sg.Desc;
@@ -20,8 +21,10 @@ pub const PipelineDesc = sg.PipelineDesc;
 pub const smoke_position_attr = smoke_shader.ATTR_smoke_position;
 pub const smoke_color_attr = smoke_shader.ATTR_smoke_color0;
 
-pub const path_position_attr = 0;
-pub const path_uv_attr = 1;
+pub const path_position_attr = path_shader.ATTR_path_position;
+pub const path_uv_attr = path_shader.ATTR_path_uv;
+pub const path_vs_params_slot = path_shader.UB_vs_params;
+pub const PathVsParams = path_shader.VsParams;
 
 pub const PathPipelineKind = enum {
     stencil_nonzero,
@@ -29,6 +32,12 @@ pub const PathPipelineKind = enum {
     cover,
     convex,
     triangles,
+};
+
+pub const StencilDraw = struct {
+    mode: PathPipelineKind,
+    base_element: u32,
+    element_count: u32,
 };
 
 pub const SmokeVertex = extern struct {
@@ -53,6 +62,13 @@ pub const Device = struct {
     smoke_pipeline: Pipeline = .{},
     smoke_vertices: Buffer = .{},
     smoke_bindings: Bindings = .{},
+    path_shader: Shader = .{},
+    path_stencil_nonzero_pipeline: Pipeline = .{},
+    path_stencil_even_odd_pipeline: Pipeline = .{},
+    path_vertex_buffer: Buffer = .{},
+    path_index_buffer: Buffer = .{},
+    path_vertex_capacity: usize = 0,
+    path_index_capacity: usize = 0,
 
     pub fn initOwned(desc: Desc) Device {
         sg.setup(desc);
@@ -65,6 +81,7 @@ pub const Device = struct {
 
     pub fn deinit(self: *Device) void {
         self.destroySmokeResources();
+        self.destroyPathResources();
         if (self.owns_setup) {
             sg.shutdown();
             self.owns_setup = false;
@@ -103,6 +120,42 @@ pub const Device = struct {
         self.smoke_bindings = .{};
     }
 
+    pub fn createPathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
+        self.destroyPathResources();
+        self.path_shader = sg.makeShader(path_shader.pathShaderDesc(sg.queryBackend()));
+        self.path_stencil_nonzero_pipeline = sg.makePipeline(pathPipelineDesc(self.path_shader, .stencil_nonzero));
+        self.path_stencil_even_odd_pipeline = sg.makePipeline(pathPipelineDesc(self.path_shader, .stencil_even_odd));
+        self.path_vertex_buffer = sg.makeBuffer(pathVertexBufferDesc(vertex_capacity));
+        self.path_index_buffer = sg.makeBuffer(pathIndexBufferDesc(index_capacity));
+        self.path_vertex_capacity = vertex_capacity;
+        self.path_index_capacity = index_capacity;
+    }
+
+    pub fn destroyPathResources(self: *Device) void {
+        if (self.path_stencil_even_odd_pipeline.id != 0) {
+            sg.destroyPipeline(self.path_stencil_even_odd_pipeline);
+            self.path_stencil_even_odd_pipeline = .{};
+        }
+        if (self.path_stencil_nonzero_pipeline.id != 0) {
+            sg.destroyPipeline(self.path_stencil_nonzero_pipeline);
+            self.path_stencil_nonzero_pipeline = .{};
+        }
+        if (self.path_shader.id != 0) {
+            sg.destroyShader(self.path_shader);
+            self.path_shader = .{};
+        }
+        if (self.path_vertex_buffer.id != 0) {
+            sg.destroyBuffer(self.path_vertex_buffer);
+            self.path_vertex_buffer = .{};
+        }
+        if (self.path_index_buffer.id != 0) {
+            sg.destroyBuffer(self.path_index_buffer);
+            self.path_index_buffer = .{};
+        }
+        self.path_vertex_capacity = 0;
+        self.path_index_capacity = 0;
+    }
+
     pub fn beginPass(self: *const Device, pass: Pass) void {
         sg.beginPass(pass);
         self.applyViewport();
@@ -129,11 +182,63 @@ pub const Device = struct {
         sg.commit();
     }
 
+    pub fn drawStencilPass(
+        self: *Device,
+        pass: Pass,
+        vertices: []const path.Vertex,
+        indices: []const u16,
+        draws: []const StencilDraw,
+        view_width: f32,
+        view_height: f32,
+    ) void {
+        if (draws.len == 0 or vertices.len == 0 or indices.len == 0) return;
+        self.ensurePathResources(vertices.len, indices.len);
+
+        sg.updateBuffer(self.path_vertex_buffer, rangeFromSlice(path.Vertex, vertices));
+        sg.updateBuffer(self.path_index_buffer, rangeFromSlice(u16, indices));
+
+        self.beginPass(pass);
+        const params = pathVsParams(view_width, view_height);
+        const bindings = pathIndexedBindings(self.path_vertex_buffer, self.path_index_buffer, 0, 0);
+
+        for (draws) |draw| {
+            if (draw.element_count == 0) continue;
+            const pipeline = self.stencilPipeline(draw.mode);
+            if (pipeline.id == 0) continue;
+            sg.applyPipeline(pipeline);
+            sg.applyBindings(bindings);
+            sg.applyUniforms(path_vs_params_slot, rangeFromValue(PathVsParams, &params));
+            sg.draw(draw.base_element, draw.element_count, 1);
+        }
+
+        sg.endPass();
+    }
+
     fn applyViewport(self: *const Device) void {
         if (self.width <= 0 or self.height <= 0) {
             return;
         }
         sg.applyViewport(0, 0, self.width, self.height, true);
+    }
+
+    fn ensurePathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
+        const missing = self.path_shader.id == 0 or
+            self.path_stencil_nonzero_pipeline.id == 0 or
+            self.path_stencil_even_odd_pipeline.id == 0 or
+            self.path_vertex_buffer.id == 0 or
+            self.path_index_buffer.id == 0;
+        if (!missing and self.path_vertex_capacity >= vertex_capacity and self.path_index_capacity >= index_capacity) {
+            return;
+        }
+        self.createPathResources(vertex_capacity, index_capacity);
+    }
+
+    fn stencilPipeline(self: *const Device, mode: PathPipelineKind) Pipeline {
+        return switch (mode) {
+            .stencil_nonzero => self.path_stencil_nonzero_pipeline,
+            .stencil_even_odd => self.path_stencil_even_odd_pipeline,
+            .cover, .convex, .triangles => .{},
+        };
     }
 };
 
@@ -227,6 +332,15 @@ pub fn pathIndexedBindings(vertex_buffer: Buffer, index_buffer: Buffer, vertex_o
     return bindings;
 }
 
+pub fn pathVsParams(view_width: f32, view_height: f32) PathVsParams {
+    return .{
+        .view_size = .{
+            if (view_width > 0) view_width else 1,
+            if (view_height > 0) view_height else 1,
+        },
+    };
+}
+
 pub fn pathPipelineDesc(shader: Shader, kind: PathPipelineKind) PipelineDesc {
     var desc: PipelineDesc = .{};
     desc.shader = shader;
@@ -311,5 +425,19 @@ fn stencilState(compare: sg.CompareFunc, front_pass: sg.StencilOp, back_pass: sg
         .read_mask = 0xff,
         .write_mask = 0xff,
         .ref = 0,
+    };
+}
+
+fn rangeFromSlice(comptime T: type, values: []const T) sg.Range {
+    return .{
+        .ptr = values.ptr,
+        .size = values.len * @sizeOf(T),
+    };
+}
+
+fn rangeFromValue(comptime T: type, value: *const T) sg.Range {
+    return .{
+        .ptr = value,
+        .size = @sizeOf(T),
     };
 }

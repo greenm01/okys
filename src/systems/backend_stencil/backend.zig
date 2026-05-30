@@ -16,6 +16,7 @@ const Point = path.Point;
 const Vertex = path.Vertex;
 const RenderInterface = @import("../../render/interface.zig").RenderInterface;
 pub const draw_plan = @import("draw_plan.zig");
+pub const replay = @import("replay.zig");
 
 pub const max_vertices = draw_plan.max_vertices;
 pub const max_indices = draw_plan.max_indices;
@@ -30,6 +31,7 @@ pub const Range = draw_plan.Range;
 pub const StencilMode = draw_plan.StencilMode;
 pub const QueuedPath = draw_plan.QueuedPath;
 pub const Call = draw_plan.Call;
+pub const StencilDraw = @import("../../render/sokol_device.zig").StencilDraw;
 
 pub const Backend = struct {
     gpa: std.mem.Allocator,
@@ -39,6 +41,7 @@ pub const Backend = struct {
     indices: std.ArrayList(u16) = .empty,
     uniforms: std.ArrayList(PaintUniform) = .empty,
     draw_ops: std.ArrayList(DrawOp) = .empty,
+    stencil_draws: std.ArrayList(StencilDraw) = .empty,
     textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
 
     viewport_width: f32 = 0,
@@ -61,6 +64,7 @@ pub const Backend = struct {
         self.indices.deinit(gpa);
         self.uniforms.deinit(gpa);
         self.draw_ops.deinit(gpa);
+        self.stencil_draws.deinit(gpa);
         self.textures.deinit(gpa);
         gpa.destroy(self);
     }
@@ -82,7 +86,7 @@ pub const Backend = struct {
     }
 
     pub fn flush(self: *Backend) void {
-        _ = self.buildDrawPlan();
+        _ = self.buildStencilPass();
         self.flush_count += 1;
         self.calls.clearRetainingCapacity();
         self.paths.clearRetainingCapacity();
@@ -90,6 +94,7 @@ pub const Backend = struct {
         self.indices.clearRetainingCapacity();
         self.uniforms.clearRetainingCapacity();
         self.draw_ops.clearRetainingCapacity();
+        self.stencil_draws.clearRetainingCapacity();
     }
 
     pub fn buildDrawPlan(self: *Backend) bool {
@@ -101,6 +106,16 @@ pub const Backend = struct {
             &self.uniforms,
             &self.indices,
             &self.draw_ops,
+        ) catch return false;
+        return true;
+    }
+
+    pub fn buildStencilPass(self: *Backend) bool {
+        if (!self.buildDrawPlan()) return false;
+        replay.buildStencilDraws(
+            self.gpa,
+            self.draw_ops.items,
+            &self.stencil_draws,
         ) catch return false;
         return true;
     }

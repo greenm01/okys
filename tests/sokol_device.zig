@@ -95,6 +95,8 @@ test "path pipeline descriptor uses path vertex layout" {
     const shader = sokol_device.Shader{ .id = 7 };
     const desc = sokol_device.pathPipelineDesc(shader, .cover);
 
+    try testing.expectEqual(@as(usize, 16), @sizeOf(sokol_device.PathVsParams));
+    try testing.expectEqual(@as(usize, 0), sokol_device.path_vs_params_slot);
     try testing.expectEqual(shader, desc.shader);
     try testing.expectEqual(@as(i32, @sizeOf(path.Vertex)), desc.layout.buffers[0].stride);
     try testing.expectEqual(@offsetOf(path.Vertex, "x"), desc.layout.attrs[sokol_device.path_position_attr].offset);
@@ -102,6 +104,13 @@ test "path pipeline descriptor uses path vertex layout" {
     try testing.expectEqual(@offsetOf(path.Vertex, "u"), desc.layout.attrs[sokol_device.path_uv_attr].offset);
     try testing.expectEqual(@as(@TypeOf(desc.layout.attrs[0].format), .FLOAT2), desc.layout.attrs[sokol_device.path_uv_attr].format);
     try testing.expectEqual(@as(@TypeOf(desc.face_winding), .CCW), desc.face_winding);
+}
+
+test "path vertex params clamp invalid view sizes" {
+    const params = sokol_device.pathVsParams(0, -4);
+
+    try testing.expectEqual(@as(f32, 1), params.view_size[0]);
+    try testing.expectEqual(@as(f32, 1), params.view_size[1]);
 }
 
 test "stencil path pipelines configure nonzero and even odd stencil ops" {

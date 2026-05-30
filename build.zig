@@ -24,6 +24,20 @@ pub fn build(b: *std.Build) !void {
         },
         .reflection = true,
     });
+    const mod_okys_path_shader = try sokol.shdc.createModule(b, "okys_path_shader", mod_sokol, .{
+        .shdc_dep = dep_sokol.builder.dependency("shdc", .{}),
+        .input = "src/shaders/path.glsl",
+        .output = "okys_path_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+            .spirv_vk = true,
+        },
+        .reflection = true,
+    });
 
     const okys_mod = b.createModule(.{
         .root_source_file = b.path("src/okys.zig"),
@@ -33,6 +47,7 @@ pub fn build(b: *std.Build) !void {
     });
     okys_mod.addImport("sokol", mod_sokol);
     okys_mod.addImport("okys_shader", mod_okys_shader);
+    okys_mod.addImport("okys_path_shader", mod_okys_path_shader);
 
     // The C ABI static library. Root is c_api.zig so its export fns are roots.
     const lib_mod = b.createModule(.{
