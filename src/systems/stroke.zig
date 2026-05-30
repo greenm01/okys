@@ -1,7 +1,6 @@
 //! Stroke outline: a flattened polyline -> its offset outline, with joins,
 //! caps, and miter handling. Shared geometry: Plan A triangulates the outline
-//! with a fringe; Plan B will analytic-cover it. TODO (Milestone 1). See
-//! AGENTS/okys/architecture.md, "DRY ledger".
+//! with a fringe; Plan B will analytic-cover it. Not implemented yet.
 
 const Context = @import("../state/context.zig").Context;
 

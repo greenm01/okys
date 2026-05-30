@@ -1,7 +1,6 @@
 //! Flattened-geometry types: the SoA-friendly Point, the PathRange that indexes
 //! into the point buffer, and the GPU-ready Vertex. Produced by
-//! systems/flatten.zig; consumed across the render interface. See
-//! AGENTS/okys/architecture.md.
+//! systems/flatten.zig; consumed across the render interface.
 
 const std = @import("std");
 

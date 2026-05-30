@@ -1,4 +1,4 @@
-//! Frame lifecycle: the tick and the immutability fence (AGENTS/okys/dod.md).
+//! Frame lifecycle: the tick and the immutability fence.
 
 const Context = @import("../state/context.zig").Context;
 const State = @import("../state/draw_state.zig").State;
@@ -21,7 +21,7 @@ pub fn beginFrame(ctx: *Context, w: f32, h: f32, dpr: f32) void {
 
 pub fn endFrame(ctx: *Context) void {
     if (ctx.backend) |b| b.flush(b.ctx);
-    // TODO (Milestone 1): the fill/stroke ops feed the backend; endFrame flushes.
+    // TODO: the fill/stroke ops feed the backend; endFrame flushes it.
 }
 
 pub fn cancelFrame(ctx: *Context) void {

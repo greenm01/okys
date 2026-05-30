@@ -1,6 +1,6 @@
-//! The C ABI surface — seam 1. The only module that exports public symbols.
-//! Signatures must match include/okys.h exactly. POD in, POD out; the context
-//! is opaque to C; errors come back as sentinels (null), never Zig errors.
+//! The C ABI surface. The only module that exports public symbols. Signatures
+//! must match include/okys.h exactly. POD in, POD out; the context is opaque to
+//! C; errors come back as sentinels (null), never Zig errors.
 
 const std = @import("std");
 const Context = @import("state/context.zig").Context;
@@ -113,10 +113,10 @@ export fn okyRect(ctx: ?*Context, x: f32, y: f32, w: f32, h: f32) void {
 
 export fn okyFill(ctx: ?*Context) void {
     _ = ctx;
-    // TODO (Milestone 1): flatten + hand the polylines to the backend's fill.
+    // TODO: flatten, then hand the polylines to the backend's fill.
 }
 
 export fn okyStroke(ctx: ?*Context) void {
     _ = ctx;
-    // TODO (Milestone 1): flatten + hand the outline to the backend's stroke.
+    // TODO: flatten, then hand the outline to the backend's stroke.
 }

@@ -1,6 +1,6 @@
 //! Per-frame scratch arena. Reset on beginFrame; never freed piecemeal. The
 //! command stream, point cache, and encode scratch allocate from here once the
-//! flatten/encode path is wired in (Milestone 1). See AGENTS/okys/dod.md.
+//! flatten/encode path is wired in.
 
 const std = @import("std");
 

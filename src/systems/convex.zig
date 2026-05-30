@@ -1,5 +1,5 @@
 //! The convexity test. Both backends take a cheaper path for convex fills, so
-//! the front-end has to tell them. TODO (Milestone 1).
+//! the front-end has to tell them. Not implemented yet.
 
 const Point = @import("../types/path.zig").Point;
 

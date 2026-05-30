@@ -1,6 +1,6 @@
 //! The flattened-path cache: SoA points plus the path ranges that index them.
 //! Filled by systems/flatten.zig and handed across the render interface. Empty
-//! until the flatten path lands (Milestone 1).
+//! until flattening is implemented.
 
 const std = @import("std");
 const path = @import("../types/path.zig");

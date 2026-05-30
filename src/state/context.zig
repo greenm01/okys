@@ -1,7 +1,6 @@
 //! Context — the internal model. Owns the command stream, the state stack, the
 //! per-frame arena, the path cache, and the texture table, plus the live render
-//! backend (none until Milestone 1). The C ABI sees this only as an opaque
-//! `OKYcontext`.
+//! backend (none yet). The C ABI sees this only as an opaque `OKYcontext`.
 
 const std = @import("std");
 const draw_state = @import("draw_state.zig");

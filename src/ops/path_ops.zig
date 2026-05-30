@@ -1,6 +1,6 @@
 //! Path-building verbs. Each appends to the command stream; flattening happens
-//! later, in systems/flatten.zig. Transform application on append arrives with
-//! the flatten path (Milestone 1).
+//! later, in systems/flatten.zig. Applying the current transform on append
+//! isn't wired up yet.
 
 const Context = @import("../state/context.zig").Context;
 

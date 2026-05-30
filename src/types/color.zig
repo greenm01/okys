@@ -1,6 +1,6 @@
 //! Color, Paint, Transform, Scissor — passive POD that crosses the C ABI and
 //! the render interface. Layout is asserted at comptime as a corruption
-//! tripwire. See AGENTS/okys/dod.md and okys.h.
+//! tripwire.
 
 const std = @import("std");
 

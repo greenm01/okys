@@ -1,6 +1,6 @@
 //! The flat command buffer. The imperative path-building API appends tagged
-//! floats here; systems/flatten.zig reads them back. This is the command stream
-//! that is the per-frame model (AGENTS/okys/dod.md).
+//! floats here; systems/flatten.zig reads them back. This is the per-frame
+//! command stream.
 
 const std = @import("std");
 const Command = @import("../types/command.zig").Command;

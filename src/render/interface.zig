@@ -1,7 +1,6 @@
-//! The render interface — seam 2. Flattened polylines, paint, and scissor cross
-//! here; never expanded meshes. Both backends implement this vtable; the
-//! front-end never knows which one is live. See AGENTS/okys/architecture.md,
-//! "The render interface".
+//! The render interface. Flattened polylines, paint, and scissor cross here;
+//! never expanded meshes. Both backends implement this vtable; the front-end
+//! never knows which one is live.
 
 const color = @import("../types/color.zig");
 const Paint = color.Paint;

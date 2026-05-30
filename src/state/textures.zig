@@ -1,6 +1,6 @@
 //! The texture table — the one long-lived entity store. Dense list, monotonic
 //! ids, 0 reserved as null. CRUD only; it knows nothing about backends or
-//! paints. See AGENTS/okys/dod.md, "Storage".
+//! paints.
 
 const std = @import("std");
 const image = @import("../types/image.zig");
@@ -27,6 +27,6 @@ pub const Textures = struct {
         return null;
     }
 
-    // create/update/delete arrive with the backend (Milestone 1); they will
-    // allocate the GPU resource and return the issued ImageId.
+    // create/update/delete arrive with the backend; they allocate the GPU
+    // resource and return the issued ImageId.
 };

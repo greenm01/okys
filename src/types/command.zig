@@ -1,6 +1,6 @@
 //! Path command tags. The front-end records the imperative API call stream as
 //! a flat buffer of these (see state/commands.zig). Matches the original C
-//! NanoVG command set — no `clip`; clipping is scissor-only (spec §4).
+//! NanoVG command set — no `clip`; clipping is scissor-only.
 
 pub const Command = enum(u8) {
     move_to = 0,

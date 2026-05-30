@@ -1,6 +1,5 @@
 //! Image/texture identity and record. Textures are the one long-lived entity
-//! table in okys; everything else is per-frame arena data. See
-//! AGENTS/okys/dod.md, "Storage".
+//! table in okys; everything else is per-frame arena data.
 
 /// Logical texture id. 0 is null and never a valid handle.
 pub const ImageId = enum(u32) {
@@ -13,8 +12,8 @@ pub const TexFormat = enum(i32) {
     a8 = 1,
 };
 
-/// A texture record. The GPU handle field arrives with the backend
-/// (Milestone 1); for now this is identity plus dimensions.
+/// A texture record. The GPU handle field arrives with the backend; for now
+/// this is identity plus dimensions.
 pub const Texture = struct {
     id: ImageId,
     width: u32,
