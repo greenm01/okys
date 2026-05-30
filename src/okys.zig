@@ -32,8 +32,8 @@ pub const systems = struct {
     pub const flatten = @import("systems/flatten.zig");
     pub const stroke = @import("systems/stroke.zig");
     pub const convex = @import("systems/convex.zig");
-    pub const backend_a = @import("systems/backend_a/backend.zig");
-    pub const backend_b = @import("systems/backend_b/backend.zig");
+    pub const backend_stencil = @import("systems/backend_stencil/backend.zig");
+    pub const backend_sparse_strip = @import("systems/backend_sparse_strip/backend.zig");
 };
 
 pub const render = struct {

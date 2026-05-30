@@ -3,6 +3,7 @@ const testing = std.testing;
 
 const okys = @import("okys");
 const backend_selection_tests = @import("backend_selection.zig");
+const backend_stencil_tests = @import("backend_stencil.zig");
 const image_ops_tests = @import("image_ops.zig");
 const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
@@ -39,13 +40,14 @@ test "all production modules analyze" {
     _ = okys.systems.flatten;
     _ = okys.systems.stroke;
     _ = okys.systems.convex;
-    _ = okys.systems.backend_a;
-    _ = okys.systems.backend_b;
+    _ = okys.systems.backend_stencil;
+    _ = okys.systems.backend_sparse_strip;
     _ = okys.render.backend_selection;
     _ = okys.render.interface;
     _ = okys.render.sokol_device;
     _ = okys.c_api;
     _ = backend_selection_tests;
+    _ = backend_stencil_tests;
     _ = image_ops_tests;
     _ = mock_backend;
     _ = sokol_device_tests;

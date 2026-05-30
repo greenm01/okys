@@ -20,7 +20,7 @@ extern "C" {
 /* Context creation flags. Mirror NanoVG's flag spirit. */
 enum OKYcreateFlags {
     OKY_ANTIALIAS = 1 << 0,       /* geometric / analytic antialiasing  */
-    OKY_STENCIL_STROKES = 1 << 1, /* stencil strokes (Plan A)           */
+    OKY_STENCIL_STROKES = 1 << 1, /* stencil strokes (stencil-cover) */
 };
 
 enum OKYlineCap {

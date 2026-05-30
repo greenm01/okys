@@ -1,5 +1,6 @@
 //! Stroke outline: a flattened polyline -> backend-neutral closed outline
-//! polygons. Plan A can triangulate these; Plan B can analytic-cover them.
+//! polygons. Stencil-cover can triangulate these; sparse-strip can analytic-cover
+//! them.
 
 const std = @import("std");
 const Context = @import("../state/context.zig").Context;
