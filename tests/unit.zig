@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const okys = @import("okys");
+const backend_selection_tests = @import("backend_selection.zig");
 const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
 const color = okys.types.color;
@@ -38,9 +39,11 @@ test "all production modules analyze" {
     _ = okys.systems.convex;
     _ = okys.systems.backend_a;
     _ = okys.systems.backend_b;
+    _ = okys.render.backend_selection;
     _ = okys.render.interface;
     _ = okys.render.sokol_device;
     _ = okys.c_api;
+    _ = backend_selection_tests;
     _ = mock_backend;
     _ = sokol_device_tests;
 }
@@ -439,7 +442,7 @@ test "degenerate stroke inputs produce no outline" {
 test "backend receives viewport flush and deinit lifecycle calls" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
-    ctx.backend = backend.interface();
+    ctx.installBackend(backend.interface());
 
     frame_ops.beginFrame(ctx, 320, 240, 2);
     try testing.expectEqual(@as(usize, 1), backend.viewport_calls);
@@ -458,7 +461,7 @@ test "fill records flattened geometry and style snapshots" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
-    ctx.backend = backend.interface();
+    ctx.installBackend(backend.interface());
 
     paint_ops.fillColor(ctx, color.rgbaf(0.25, 0.5, 0.75, 0.8));
     state_ops.save(ctx);
@@ -494,7 +497,7 @@ test "stroke records shared outline geometry and style snapshots" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
-    ctx.backend = backend.interface();
+    ctx.installBackend(backend.interface());
 
     state_ops.strokeWidth(ctx, 10);
     state_ops.lineCap(ctx, .round);
@@ -523,14 +526,14 @@ test "empty draw calls and no backend do not emit render calls" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
-    ctx.backend = backend.interface();
+    ctx.installBackend(backend.interface());
 
     render_ops.fill(ctx);
     render_ops.stroke(ctx);
     try testing.expectEqual(@as(usize, 0), backend.fill_calls);
     try testing.expectEqual(@as(usize, 0), backend.stroke_calls);
 
-    ctx.backend = null;
+    ctx.clearBackend();
     path_ops.beginPath(ctx);
     path_ops.rect(ctx, 0, 0, 10, 10);
     render_ops.fill(ctx);
@@ -541,7 +544,7 @@ test "cancel frame clears transient draw data without flushing" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
-    ctx.backend = backend.interface();
+    ctx.installBackend(backend.interface());
 
     path_ops.beginPath(ctx);
     path_ops.rect(ctx, 0, 0, 10, 10);

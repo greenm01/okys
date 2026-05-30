@@ -10,10 +10,13 @@ const PathCache = @import("path_cache.zig").PathCache;
 const FrameArena = @import("arena.zig").FrameArena;
 const Textures = @import("textures.zig").Textures;
 const RenderInterface = @import("../render/interface.zig").RenderInterface;
+const backend_selection = @import("../render/backend_selection.zig");
+const BackendKind = backend_selection.BackendKind;
 
 pub const Context = struct {
     gpa: std.mem.Allocator,
     flags: u32,
+    backend_kind: BackendKind,
 
     commands: CommandBuffer = .{},
     command_x: f32 = 0,
@@ -36,6 +39,7 @@ pub const Context = struct {
         self.* = .{
             .gpa = gpa,
             .flags = flags,
+            .backend_kind = backend_selection.fromCreateFlags(flags),
             .frame_arena = FrameArena.init(gpa),
             .textures = Textures.init(gpa),
         };
@@ -46,7 +50,7 @@ pub const Context = struct {
 
     pub fn destroy(self: *Context) void {
         const gpa = self.gpa;
-        if (self.backend) |b| b.deinit(b.ctx);
+        self.clearBackend();
         self.commands.deinit(gpa);
         self.states.deinit(gpa);
         self.cache.deinit(gpa);
@@ -59,5 +63,17 @@ pub const Context = struct {
     /// The live (top-of-stack) draw state.
     pub fn state(self: *Context) *State {
         return &self.states.items[self.states.items.len - 1];
+    }
+
+    pub fn installBackend(self: *Context, backend: RenderInterface) void {
+        self.clearBackend();
+        self.backend = backend;
+    }
+
+    pub fn clearBackend(self: *Context) void {
+        if (self.backend) |b| {
+            b.deinit(b.ctx);
+            self.backend = null;
+        }
     }
 };
