@@ -17,6 +17,7 @@ pub fn beginFrame(ctx: *Context, w: f32, h: f32, dpr: f32) void {
 
     ctx.commands.clear();
     ctx.cache.clear();
+    ctx.stroke_outline.clear();
     ctx.frame_arena.reset();
 
     if (ctx.backend) |b| b.viewport(b.ctx, w, h, ratio);
@@ -30,4 +31,5 @@ pub fn endFrame(ctx: *Context) void {
 pub fn cancelFrame(ctx: *Context) void {
     ctx.commands.clear();
     ctx.cache.clear();
+    ctx.stroke_outline.clear();
 }

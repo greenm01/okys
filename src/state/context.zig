@@ -20,6 +20,7 @@ pub const Context = struct {
     command_y: f32 = 0,
     states: std.ArrayList(State) = .empty,
     cache: PathCache = .{},
+    stroke_outline: PathCache = .{},
     frame_arena: FrameArena,
     textures: Textures,
     backend: ?RenderInterface = null,
@@ -48,6 +49,7 @@ pub const Context = struct {
         self.commands.deinit(gpa);
         self.states.deinit(gpa);
         self.cache.deinit(gpa);
+        self.stroke_outline.deinit(gpa);
         self.frame_arena.deinit();
         self.textures.deinit();
         gpa.destroy(self);

@@ -9,6 +9,7 @@ const path_ops = okys.ops.path;
 const state_ops = okys.ops.state;
 const frame_ops = okys.ops.frame;
 const flatten = okys.systems.flatten;
+const stroke = okys.systems.stroke;
 const xforms = okys.systems.transform;
 
 test "all production modules analyze" {
@@ -298,4 +299,141 @@ test "higher dpr tightens bezier flattening tolerance" {
     flatten.flatten(high);
 
     try testing.expect(high.cache.paths.items[0].point_count >= low.cache.paths.items[0].point_count);
+}
+
+test "butt cap line outline does not extend past endpoints" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    state_ops.strokeWidth(ctx, 10);
+    state_ops.lineCap(ctx, .butt);
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 20, 0);
+    stroke.buildOutline(ctx);
+
+    try testing.expectEqual(@as(usize, 1), ctx.stroke_outline.paths.items.len);
+    try testing.expectApproxEqAbs(@as(f32, 0), ctx.stroke_outline.bounds[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 20), ctx.stroke_outline.bounds[2], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, -5), ctx.stroke_outline.bounds[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 5), ctx.stroke_outline.bounds[3], 0.001);
+}
+
+test "square cap line outline extends by half stroke width" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    state_ops.strokeWidth(ctx, 10);
+    state_ops.lineCap(ctx, .square);
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 20, 0);
+    stroke.buildOutline(ctx);
+
+    try testing.expectApproxEqAbs(@as(f32, -5), ctx.stroke_outline.bounds[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 25), ctx.stroke_outline.bounds[2], 0.001);
+}
+
+test "round cap line outline has more points than butt cap" {
+    const butt = try Context.create(testing.allocator, 0);
+    defer butt.destroy();
+    const round = try Context.create(testing.allocator, 0);
+    defer round.destroy();
+
+    state_ops.strokeWidth(butt, 10);
+    state_ops.lineCap(butt, .butt);
+    path_ops.moveTo(butt, 0, 0);
+    path_ops.lineTo(butt, 20, 0);
+    stroke.buildOutline(butt);
+
+    state_ops.strokeWidth(round, 10);
+    state_ops.lineCap(round, .round);
+    path_ops.moveTo(round, 0, 0);
+    path_ops.lineTo(round, 20, 0);
+    stroke.buildOutline(round);
+
+    try testing.expect(round.stroke_outline.points.items.len > butt.stroke_outline.points.items.len);
+}
+
+test "closed rectangle stroke produces closed outline contours" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    state_ops.strokeWidth(ctx, 4);
+    path_ops.rect(ctx, 0, 0, 20, 10);
+    stroke.buildOutline(ctx);
+
+    try testing.expectEqual(@as(usize, 2), ctx.stroke_outline.paths.items.len);
+    const outline_path = ctx.stroke_outline.paths.items[0];
+    try testing.expect(outline_path.closed);
+    const pts = ctx.stroke_outline.points.items[outline_path.point_start..][0..outline_path.point_count];
+    try testing.expect(@abs(polyArea(pts)) > 0.001);
+}
+
+test "low miter limit adds bevel points on sharp closed stroke" {
+    const miter = try Context.create(testing.allocator, 0);
+    defer miter.destroy();
+    const bevel = try Context.create(testing.allocator, 0);
+    defer bevel.destroy();
+
+    state_ops.strokeWidth(miter, 4);
+    state_ops.miterLimit(miter, 10);
+    path_ops.rect(miter, 0, 0, 20, 10);
+    stroke.buildOutline(miter);
+
+    state_ops.strokeWidth(bevel, 4);
+    state_ops.miterLimit(bevel, 0.5);
+    path_ops.rect(bevel, 0, 0, 20, 10);
+    stroke.buildOutline(bevel);
+
+    try testing.expect(bevel.stroke_outline.points.items.len > miter.stroke_outline.points.items.len);
+}
+
+test "round join adds points compared with bevel join" {
+    const bevel = try Context.create(testing.allocator, 0);
+    defer bevel.destroy();
+    const round = try Context.create(testing.allocator, 0);
+    defer round.destroy();
+
+    state_ops.strokeWidth(bevel, 6);
+    state_ops.lineJoin(bevel, .bevel);
+    path_ops.moveTo(bevel, 0, 0);
+    path_ops.lineTo(bevel, 20, 0);
+    path_ops.lineTo(bevel, 20, 20);
+    stroke.buildOutline(bevel);
+
+    state_ops.strokeWidth(round, 6);
+    state_ops.lineJoin(round, .round);
+    path_ops.moveTo(round, 0, 0);
+    path_ops.lineTo(round, 20, 0);
+    path_ops.lineTo(round, 20, 20);
+    stroke.buildOutline(round);
+
+    try testing.expect(round.stroke_outline.points.items.len > bevel.stroke_outline.points.items.len);
+}
+
+test "degenerate stroke inputs produce no outline" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    state_ops.strokeWidth(ctx, 0);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 20, 0);
+    stroke.buildOutline(ctx);
+    try testing.expectEqual(@as(usize, 0), ctx.stroke_outline.paths.items.len);
+
+    state_ops.strokeWidth(ctx, 4);
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    stroke.buildOutline(ctx);
+    try testing.expectEqual(@as(usize, 0), ctx.stroke_outline.paths.items.len);
+}
+
+fn polyArea(pts: []const okys.types.path.Point) f32 {
+    var area: f32 = 0;
+    for (pts, 0..) |p0, i| {
+        const p1 = pts[(i + 1) % pts.len];
+        area += p0.x * p1.y - p1.x * p0.y;
+    }
+    return area * 0.5;
 }
