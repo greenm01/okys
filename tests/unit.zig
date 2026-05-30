@@ -3,6 +3,7 @@ const testing = std.testing;
 
 const okys = @import("okys");
 const backend_selection_tests = @import("backend_selection.zig");
+const backend_sparse_strip_tests = @import("backend_sparse_strip.zig");
 const backend_stencil_draw_plan_tests = @import("backend_stencil_draw_plan.zig");
 const backend_stencil_golden_tests = @import("backend_stencil_golden.zig");
 const backend_stencil_replay_tests = @import("backend_stencil_replay.zig");
@@ -49,11 +50,17 @@ test "all production modules analyze" {
     _ = okys.systems.backend_stencil.draw_plan;
     _ = okys.systems.backend_stencil.replay;
     _ = okys.systems.backend_sparse_strip;
+    _ = okys.systems.backend_sparse_strip.encode;
+    _ = okys.systems.backend_sparse_strip.bin;
+    _ = okys.systems.backend_sparse_strip.coarse;
+    _ = okys.systems.backend_sparse_strip.fine;
+    _ = okys.systems.backend_sparse_strip.strip;
     _ = okys.render.backend_selection;
     _ = okys.render.interface;
     _ = okys.render.sokol_device;
     _ = okys.c_api;
     _ = backend_selection_tests;
+    _ = backend_sparse_strip_tests;
     _ = backend_stencil_draw_plan_tests;
     _ = backend_stencil_golden_tests;
     _ = backend_stencil_replay_tests;

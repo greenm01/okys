@@ -1,0 +1,198 @@
+const std = @import("std");
+const testing = std.testing;
+
+const okys = @import("okys");
+const color = okys.types.color;
+const ImageId = okys.types.image.ImageId;
+const PathRange = okys.types.path.PathRange;
+const Point = okys.types.path.Point;
+const Vertex = okys.types.path.Vertex;
+const sparse = okys.systems.backend_sparse_strip;
+const Backend = sparse.Backend;
+
+const disabled_scissor: color.Scissor = .{
+    .xform = .{ 0, 0, 0, 0, 0, 0 },
+    .extent = .{ -1, -1 },
+};
+
+test "sparse backend records viewport and clears queued proof buffers on flush" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    iface.viewport(iface.ctx, 64, 48, 2);
+    try testing.expectEqual(@as(f32, 64), backend.viewport_width);
+    try testing.expectEqual(@as(f32, 48), backend.viewport_height);
+    try testing.expectEqual(@as(f32, 2), backend.viewport_dpr);
+
+    queueRect(&iface, 4, 4, 12, 12);
+    try testing.expectEqual(@as(usize, 1), backend.calls.items.len);
+    try testing.expectEqual(@as(usize, 4), backend.segments.items.len);
+
+    iface.flush(iface.ctx);
+    try testing.expectEqual(@as(usize, 1), backend.flush_count);
+    try testing.expectEqual(@as(usize, 0), backend.calls.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.segments.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.strips.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.alphas.items.len);
+}
+
+test "sparse encode preserves call range and convex hint for rect" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 64, 64, 1);
+
+    queueRect(&iface, 4, 4, 12, 12);
+
+    try testing.expectEqual(@as(usize, 1), backend.calls.items.len);
+    try testing.expectEqual(.fill, backend.calls.items[0].kind);
+    try testing.expectEqual(@as(u32, 0), backend.calls.items[0].segments.start);
+    try testing.expectEqual(@as(u32, 4), backend.calls.items[0].segments.count);
+    try testing.expect(backend.calls.items[0].convex);
+    try testing.expectEqual(@as(u32, 0), backend.segments.items[0].call_index);
+    try testing.expectEqual(@as(u32, 0), backend.segments.items[0].path_index);
+}
+
+test "sparse binning emits one strip per covered call tile" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 64, 64, 1);
+
+    queueRect(&iface, 0, 0, 32, 32);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual(@as(usize, 16), backend.tiles.items.len);
+    try testing.expectEqual(@as(usize, 4), backend.strips.items.len);
+    try testing.expectEqual(@as(u16, 0), backend.strips.items[0].x);
+    try testing.expectEqual(@as(u16, 0), backend.strips.items[0].y);
+    try testing.expectEqual(@as(u16, 16), backend.strips.items[1].x);
+    try testing.expectEqual(@as(u16, 0), backend.strips.items[1].y);
+    try testing.expectEqual(@as(u32, 4), backend.strips.items[0].segment_indices.count);
+}
+
+test "sparse fine stage covers solid rect interior and leaves exterior empty" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, 4, 4, 12, 12);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual(@as(usize, 1), backend.strips.items.len);
+    const strip = backend.strips.items[0];
+    try testing.expectEqual(sparse.strip.tile_area, strip.alpha.count);
+    try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 8, 8));
+    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 1, 1));
+}
+
+test "sparse even odd coverage cuts a hole from nested paths" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    backend.fill_rule = .even_odd;
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 2, .y = 2 },
+        .{ .x = 18, .y = 2 },
+        .{ .x = 18, .y = 18 },
+        .{ .x = 2, .y = 18 },
+        .{ .x = 7, .y = 7 },
+        .{ .x = 13, .y = 7 },
+        .{ .x = 13, .y = 13 },
+        .{ .x = 7, .y = 13 },
+    };
+    const paths = [_]PathRange{
+        .{ .point_start = 0, .point_count = 4, .closed = true, .convex = false },
+        .{ .point_start = 4, .point_count = 4, .closed = true, .convex = false },
+    };
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 2, 2, 18, 18 }, &paths, &points);
+    try testing.expect(backend.build());
+
+    const strip = findStrip(backend, 0, 0, 0).?;
+    try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 4, 4));
+    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 10, 10));
+}
+
+test "sparse backend queues stroke outlines as path segments" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 4, .y = 4 },
+        .{ .x = 16, .y = 4 },
+        .{ .x = 10, .y = 16 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
+
+    iface.stroke(iface.ctx, &paint, &disabled_scissor, 3, &paths, &points);
+    try testing.expectEqual(@as(usize, 1), backend.calls.items.len);
+    try testing.expectEqual(.stroke, backend.calls.items[0].kind);
+    try testing.expectEqual(@as(f32, 3), backend.calls.items[0].width);
+    try testing.expectEqual(@as(u32, 3), backend.calls.items[0].segments.count);
+}
+
+test "sparse backend texture callbacks store dimensions" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    const id: ImageId = @enumFromInt(42);
+
+    try testing.expect(iface.create_texture(iface.ctx, id, 7, 9, .rgba8, null));
+    try testing.expectEqual([2]u32{ 7, 9 }, iface.texture_size(iface.ctx, id).?);
+    iface.delete_texture(iface.ctx, id);
+    try testing.expect(iface.texture_size(iface.ctx, id) == null);
+}
+
+test "sparse triangle input encodes one closed triangle segment set" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const verts = [_]Vertex{
+        .{ .x = 4, .y = 4, .u = 0, .v = 0 },
+        .{ .x = 14, .y = 4, .u = 0, .v = 0 },
+        .{ .x = 4, .y = 14, .u = 0, .v = 0 },
+    };
+    iface.triangles(iface.ctx, &paint, &disabled_scissor, &verts);
+
+    try testing.expectEqual(@as(usize, 1), backend.calls.items.len);
+    try testing.expectEqual(.triangles, backend.calls.items[0].kind);
+    try testing.expectEqual(@as(u32, 3), backend.calls.items[0].segments.count);
+}
+
+fn queueRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f32, x1: f32, y1: f32) void {
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = x0, .y = y0 },
+        .{ .x = x1, .y = y0 },
+        .{ .x = x1, .y = y1 },
+        .{ .x = x0, .y = y1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ x0, y0, x1, y1 }, &paths, &points);
+}
+
+fn alphaAt(backend: *const Backend, s: sparse.Strip, x: u16, y: u16) u8 {
+    const local_x = x - s.x;
+    const local_y = y - s.y;
+    const alpha_start: usize = @intCast(s.alpha.start);
+    const index = alpha_start + @as(usize, local_y) * sparse.strip.tile_size + local_x;
+    return backend.alphas.items[index];
+}
+
+fn findStrip(backend: *const Backend, x: u16, y: u16, call_index: u32) ?sparse.Strip {
+    for (backend.strips.items) |s| {
+        if (s.x == x and s.y == y and s.call_index == call_index) return s;
+    }
+    return null;
+}

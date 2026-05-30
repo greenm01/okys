@@ -6,7 +6,9 @@ pub const BackendKind = enum(u8) {
     sparse_strip,
 };
 
+const OKY_SPARSE_STRIP: u32 = 1 << 2;
+
 pub fn fromCreateFlags(flags: u32) BackendKind {
-    _ = flags;
+    if ((flags & OKY_SPARSE_STRIP) != 0) return .sparse_strip;
     return .stencil_cover;
 }

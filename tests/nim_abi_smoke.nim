@@ -2,6 +2,7 @@ import std/math
 
 const
   OKY_ANTIALIAS* = 1 shl 0
+  OKY_SPARSE_STRIP* = 1 shl 2
   OKY_ROUND* = 1
   OKY_BEVEL* = 2
   OKY_CW* = 2
@@ -107,6 +108,9 @@ doAssert near(red.rgba[3], 1.0)
 let blue = okyRGBAf(0.0, 0.0, 1.0, 1.0)
 let ctx = okyCreate(OKY_ANTIALIAS)
 doAssert ctx != nil
+let sparseCtx = okyCreate(OKY_SPARSE_STRIP)
+doAssert sparseCtx != nil
+okyDelete(sparseCtx)
 
 okyBeginFrame(ctx, 800.0, 600.0, 1.0)
 

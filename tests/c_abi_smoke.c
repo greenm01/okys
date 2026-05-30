@@ -17,6 +17,9 @@ int main(void) {
 
     OKYcontext *ctx = okyCreate(OKY_ANTIALIAS);
     assert(ctx != NULL);
+    OKYcontext *sparse_ctx = okyCreate(OKY_SPARSE_STRIP);
+    assert(sparse_ctx != NULL);
+    okyDelete(sparse_ctx);
 
     okyBeginFrame(ctx, 800.0f, 600.0f, 1.0f);
 

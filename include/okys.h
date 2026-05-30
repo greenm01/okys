@@ -21,6 +21,7 @@ extern "C" {
 enum OKYcreateFlags {
     OKY_ANTIALIAS = 1 << 0,       /* geometric / analytic antialiasing  */
     OKY_STENCIL_STROKES = 1 << 1, /* stencil strokes (stencil-cover) */
+    OKY_SPARSE_STRIP = 1 << 2,    /* sparse-strip backend */
 };
 
 enum OKYlineCap {
