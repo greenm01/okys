@@ -27,6 +27,8 @@ pub const Context = struct {
     width: f32 = 0,
     height: f32 = 0,
     device_pixel_ratio: f32 = 1,
+    tess_tol: f32 = 0.25,
+    dist_tol: f32 = 0.01,
 
     pub fn create(gpa: std.mem.Allocator, flags: u32) !*Context {
         const self = try gpa.create(Context);

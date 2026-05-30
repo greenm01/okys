@@ -7,6 +7,8 @@ const Context = okys.state.context.Context;
 const paint_ops = okys.ops.paint;
 const path_ops = okys.ops.path;
 const state_ops = okys.ops.state;
+const frame_ops = okys.ops.frame;
+const flatten = okys.systems.flatten;
 const xforms = okys.systems.transform;
 
 test "all production modules analyze" {
@@ -178,4 +180,122 @@ test "rounded rect and ellipse emit closed paths" {
     const ellipse_len = ctx.commands.data.items.len;
     try testing.expect(ellipse_len > 0);
     try testing.expectEqual(@as(f32, 3), ctx.commands.data.items[ellipse_len - 1]);
+}
+
+test "closed rect flattens to convex four point path" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    path_ops.beginPath(ctx);
+    path_ops.rect(ctx, 0, 0, 10, 20);
+    flatten.flatten(ctx);
+
+    try testing.expectEqual(@as(usize, 1), ctx.cache.paths.items.len);
+    const p = ctx.cache.paths.items[0];
+    try testing.expectEqual(@as(u32, 4), p.point_count);
+    try testing.expect(p.closed);
+    try testing.expect(p.convex);
+    try testing.expectEqual(@as(f32, 0), ctx.cache.bounds[0]);
+    try testing.expectEqual(@as(f32, 0), ctx.cache.bounds[1]);
+    try testing.expectEqual(@as(f32, 10), ctx.cache.bounds[2]);
+    try testing.expectEqual(@as(f32, 20), ctx.cache.bounds[3]);
+
+    const pts = ctx.cache.points.items[p.point_start..][0..p.point_count];
+    try testing.expectApproxEqAbs(@as(f32, 20), pts[0].len, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 10), pts[1].len, 0.001);
+}
+
+test "open line remains open with no closing segment" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 3, 4);
+    flatten.flatten(ctx);
+
+    const p = ctx.cache.paths.items[0];
+    try testing.expect(!p.closed);
+    try testing.expect(!p.convex);
+    try testing.expectEqual(@as(u32, 2), p.point_count);
+    const pts = ctx.cache.points.items[p.point_start..][0..p.point_count];
+    try testing.expectApproxEqAbs(@as(f32, 5), pts[0].len, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), pts[1].len, 0.001);
+}
+
+test "cubic curve flattens into line segments ending at target" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.bezierTo(ctx, 0, 100, 100, 100, 100, 0);
+    flatten.flatten(ctx);
+
+    const p = ctx.cache.paths.items[0];
+    try testing.expect(p.point_count > 2);
+    const pts = ctx.cache.points.items[p.point_start..][0..p.point_count];
+    const last = pts[pts.len - 1];
+    try testing.expectApproxEqAbs(@as(f32, 100), last.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), last.y, 0.001);
+}
+
+test "duplicate line points are merged while flattening" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 0, 0);
+    path_ops.lineTo(ctx, 10, 0);
+    flatten.flatten(ctx);
+
+    const p = ctx.cache.paths.items[0];
+    try testing.expectEqual(@as(u32, 2), p.point_count);
+}
+
+test "cw winding reverses a default rect" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    path_ops.beginPath(ctx);
+    path_ops.rect(ctx, 0, 0, 10, 20);
+    path_ops.pathWinding(ctx, .cw);
+    flatten.flatten(ctx);
+
+    const p = ctx.cache.paths.items[0];
+    try testing.expectEqual(.cw, p.winding);
+    const pts = ctx.cache.points.items[p.point_start..][0..p.point_count];
+    try testing.expectApproxEqAbs(@as(f32, 10), pts[0].x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), pts[0].y, 0.001);
+}
+
+test "malformed command buffer produces no paths" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    ctx.commands.float(ctx.gpa, 0);
+    flatten.flatten(ctx);
+
+    try testing.expectEqual(@as(usize, 0), ctx.cache.paths.items.len);
+    try testing.expectEqual(@as(f32, 0), ctx.cache.bounds[0]);
+}
+
+test "higher dpr tightens bezier flattening tolerance" {
+    const low = try Context.create(testing.allocator, 0);
+    defer low.destroy();
+    const high = try Context.create(testing.allocator, 0);
+    defer high.destroy();
+
+    frame_ops.beginFrame(low, 100, 100, 1);
+    path_ops.moveTo(low, 0, 0);
+    path_ops.bezierTo(low, 0, 100, 100, 100, 100, 0);
+    flatten.flatten(low);
+
+    frame_ops.beginFrame(high, 100, 100, 2);
+    path_ops.moveTo(high, 0, 0);
+    path_ops.bezierTo(high, 0, 100, 100, 100, 100, 0);
+    flatten.flatten(high);
+
+    try testing.expect(high.cache.paths.items[0].point_count >= low.cache.paths.items[0].point_count);
 }
