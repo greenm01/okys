@@ -158,6 +158,7 @@ test "cover path pipeline reads and clears stencil while blending color" {
 test "direct path pipelines blend without stencil" {
     const shader = sokol_device.Shader{ .id = 7 };
     const convex = sokol_device.pathPipelineDesc(shader, .convex);
+    const fringe = sokol_device.pathPipelineDesc(shader, .fringe);
     const triangles = sokol_device.pathPipelineDesc(shader, .triangles);
 
     try testing.expectEqual(@as(@TypeOf(convex.primitive_type), .TRIANGLES), convex.primitive_type);
@@ -165,10 +166,30 @@ test "direct path pipelines blend without stencil" {
     try testing.expect(!convex.stencil.enabled);
     try testing.expect(convex.colors[0].blend.enabled);
 
+    try testing.expectEqual(@as(@TypeOf(fringe.primitive_type), .TRIANGLE_STRIP), fringe.primitive_type);
+    try testing.expectEqual(@as(@TypeOf(fringe.index_type), .DEFAULT), fringe.index_type);
+    try testing.expect(!fringe.stencil.enabled);
+    try testing.expect(fringe.colors[0].blend.enabled);
+
     try testing.expectEqual(@as(@TypeOf(triangles.primitive_type), .TRIANGLES), triangles.primitive_type);
     try testing.expectEqual(@as(@TypeOf(triangles.index_type), .DEFAULT), triangles.index_type);
     try testing.expect(!triangles.stencil.enabled);
     try testing.expect(triangles.colors[0].blend.enabled);
+}
+
+test "fringe stencil pipeline reads stencil without clearing it" {
+    const shader = sokol_device.Shader{ .id = 7 };
+    const desc = sokol_device.pathPipelineDesc(shader, .fringe_stencil);
+
+    try testing.expectEqual(@as(@TypeOf(desc.primitive_type), .TRIANGLE_STRIP), desc.primitive_type);
+    try testing.expectEqual(@as(@TypeOf(desc.index_type), .DEFAULT), desc.index_type);
+    try testing.expect(desc.stencil.enabled);
+    try testing.expectEqual(@as(@TypeOf(desc.stencil.front.compare), .EQUAL), desc.stencil.front.compare);
+    try testing.expectEqual(@as(@TypeOf(desc.stencil.front.pass_op), .KEEP), desc.stencil.front.pass_op);
+    try testing.expectEqual(@as(@TypeOf(desc.stencil.back.pass_op), .KEEP), desc.stencil.back.pass_op);
+    try testing.expectEqual(@as(u8, 0xff), desc.stencil.read_mask);
+    try testing.expectEqual(@as(u8, 0), desc.stencil.write_mask);
+    try testing.expect(desc.colors[0].blend.enabled);
 }
 
 test "attached device records pixel viewport dimensions" {

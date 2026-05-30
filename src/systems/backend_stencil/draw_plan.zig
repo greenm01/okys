@@ -38,8 +38,10 @@ pub const StencilMode = enum {
 
 pub const DrawOpKind = enum {
     stencil_fill,
+    fringe_stencil_fill,
     cover_fill,
     convex_fill,
+    fringe_fill,
     triangles,
 };
 
@@ -50,6 +52,7 @@ pub const Range = struct {
 
 pub const QueuedPath = struct {
     vertices: Range = .{},
+    fringe: Range = .{},
     winding: Winding = .ccw,
     closed: bool = false,
     convex: bool = false,
@@ -64,6 +67,7 @@ pub const Call = struct {
     paths: Range = .{},
     vertices: Range = .{},
     cover: Range = .{},
+    antialias: bool = false,
 };
 
 pub const PaintUniform = struct {
@@ -78,6 +82,7 @@ pub const PaintUniform = struct {
     outer_color: color.Color = .{},
     image: i32 = 0,
     scissor_enabled: bool = false,
+    edge_alpha_multiplier: f32 = 0,
 };
 
 pub const DrawOp = struct {
@@ -103,9 +108,9 @@ pub fn build(
     indices.clearRetainingCapacity();
     draw_ops.clearRetainingCapacity();
 
-    try uniforms.ensureUnusedCapacity(gpa, calls.len);
+    try uniforms.ensureUnusedCapacity(gpa, estimateUniforms(calls));
     try indices.ensureUnusedCapacity(gpa, estimateFanIndices(calls, queued_paths));
-    try draw_ops.ensureUnusedCapacity(gpa, estimateDrawOps(calls));
+    try draw_ops.ensureUnusedCapacity(gpa, estimateDrawOps(calls, queued_paths));
 
     for (calls) |call| {
         switch (call.call_type) {
@@ -145,6 +150,17 @@ fn appendFill(
         });
     }
 
+    for (pathsFor(call, queued_paths)) |p| {
+        if (p.fringe.count == 0) continue;
+        draw_ops.appendAssumeCapacity(.{
+            .kind = .fringe_stencil_fill,
+            .primitive = .triangle_strip,
+            .vertices = p.fringe,
+            .uniform_index = uniform_index,
+            .winding = p.winding,
+        });
+    }
+
     if (call.cover.count > 0) {
         draw_ops.appendAssumeCapacity(.{
             .kind = .cover_fill,
@@ -174,6 +190,15 @@ fn appendConvexFill(
             .uniform_index = uniform_index,
             .winding = p.winding,
         });
+        if (p.fringe.count > 0) {
+            draw_ops.appendAssumeCapacity(.{
+                .kind = .fringe_fill,
+                .primitive = .triangle_strip,
+                .vertices = p.fringe,
+                .uniform_index = uniform_index,
+                .winding = p.winding,
+            });
+        }
     }
 }
 
@@ -195,7 +220,9 @@ fn appendTriangles(
 
 fn appendUniform(call: Call, uniforms: *std.ArrayList(PaintUniform)) u32 {
     const index: u32 = @intCast(uniforms.items.len);
-    uniforms.appendAssumeCapacity(packUniform(&call.paint, &call.scissor));
+    var uniform = packUniform(&call.paint, &call.scissor);
+    uniform.edge_alpha_multiplier = if (call.antialias) 1 else 0;
+    uniforms.appendAssumeCapacity(uniform);
     return index;
 }
 
@@ -266,13 +293,33 @@ fn pathsFor(call: Call, queued_paths: []const QueuedPath) []const QueuedPath {
     return queued_paths[start..][0..count];
 }
 
-fn estimateDrawOps(calls: []const Call) usize {
+fn estimateDrawOps(calls: []const Call, queued_paths: []const QueuedPath) usize {
     var count: usize = 0;
     for (calls) |call| {
         switch (call.call_type) {
-            .fill => count += @as(usize, call.paths.count) + @as(usize, @intFromBool(call.cover.count > 0)),
-            .fill_convex => count += @as(usize, call.paths.count),
+            .fill => {
+                for (pathsFor(call, queued_paths)) |p| {
+                    count += 1 + @as(usize, @intFromBool(p.fringe.count > 0));
+                }
+                count += @as(usize, @intFromBool(call.cover.count > 0));
+            },
+            .fill_convex => {
+                for (pathsFor(call, queued_paths)) |p| {
+                    count += 1 + @as(usize, @intFromBool(p.fringe.count > 0));
+                }
+            },
             .triangles => count += @as(usize, @intFromBool(call.vertices.count >= 3)),
+            .stroke => {},
+        }
+    }
+    return count;
+}
+
+fn estimateUniforms(calls: []const Call) usize {
+    var count: usize = 0;
+    for (calls) |call| {
+        switch (call.call_type) {
+            .fill, .fill_convex, .triangles => count += 1,
             .stroke => {},
         }
     }

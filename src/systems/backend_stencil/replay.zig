@@ -62,6 +62,15 @@ fn appendPathDraws(
                     .uniform_index = op.uniform_index,
                 });
             },
+            .fringe_stencil_fill => {
+                if (op.vertices.count == 0) continue;
+                draws.appendAssumeCapacity(.{
+                    .kind = .fringe_stencil,
+                    .base_element = op.vertices.start,
+                    .element_count = op.vertices.count,
+                    .uniform_index = op.uniform_index,
+                });
+            },
             .cover_fill => {
                 if (op.vertices.count == 0) continue;
                 draws.appendAssumeCapacity(.{
@@ -77,6 +86,15 @@ fn appendPathDraws(
                     .kind = .convex,
                     .base_element = op.indices.start,
                     .element_count = op.indices.count,
+                    .uniform_index = op.uniform_index,
+                });
+            },
+            .fringe_fill => {
+                if (op.vertices.count == 0) continue;
+                draws.appendAssumeCapacity(.{
+                    .kind = .fringe,
+                    .base_element = op.vertices.start,
+                    .element_count = op.vertices.count,
                     .uniform_index = op.uniform_index,
                 });
             },
@@ -136,7 +154,7 @@ fn countPathDraws(draw_ops: []const draw_plan.DrawOp) usize {
     for (draw_ops) |op| {
         switch (op.kind) {
             .stencil_fill, .convex_fill => count += @intFromBool(op.indices.count > 0),
-            .cover_fill => count += @intFromBool(op.vertices.count > 0),
+            .fringe_stencil_fill, .cover_fill, .fringe_fill => count += @intFromBool(op.vertices.count > 0),
             .triangles => count += @intFromBool(op.vertices.count > 0),
         }
     }
@@ -191,7 +209,7 @@ fn packFragmentParams(uniform: draw_plan.PaintUniform) sokol_device.PathFsParams
             uniform.radius,
             uniform.feather,
         },
-        .params = .{ 0, 0, 0, 0 },
+        .params = .{ uniform.edge_alpha_multiplier, 0, 0, 0 },
     };
 }
 

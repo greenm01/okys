@@ -18,6 +18,8 @@ const RenderInterface = @import("../../render/interface.zig").RenderInterface;
 pub const draw_plan = @import("draw_plan.zig");
 pub const replay = @import("replay.zig");
 
+const OKY_ANTIALIAS: u32 = 1 << 0;
+
 pub const max_vertices = draw_plan.max_vertices;
 pub const max_indices = draw_plan.max_indices;
 
@@ -54,11 +56,19 @@ pub const Backend = struct {
     viewport_height: f32 = 0,
     viewport_dpr: f32 = 1,
     fill_rule: FillRule = .nonzero,
+    antialias: bool = false,
     flush_count: usize = 0,
 
     pub fn create(gpa: std.mem.Allocator) !*Backend {
+        return createWithFlags(gpa, 0);
+    }
+
+    pub fn createWithFlags(gpa: std.mem.Allocator, flags: u32) !*Backend {
         const self = try gpa.create(Backend);
-        self.* = .{ .gpa = gpa };
+        self.* = .{
+            .gpa = gpa,
+            .antialias = (flags & OKY_ANTIALIAS) != 0,
+        };
         return self;
     }
 
@@ -140,11 +150,12 @@ pub const Backend = struct {
         var valid_path_count: usize = 0;
         var vertex_count: usize = 0;
         var single_convex = false;
+        const fringe_width = self.fringeWidth();
 
         for (input_paths) |p| {
             if (!validFillPath(p, points.len)) continue;
             valid_path_count += 1;
-            vertex_count += p.point_count;
+            vertex_count += self.fillVertexCount(p.point_count);
             single_convex = p.convex;
         }
         if (valid_path_count == 0) return;
@@ -168,11 +179,20 @@ pub const Backend = struct {
 
             const start = self.vertices.items.len;
             const path_points = points[p.point_start..][0..p.point_count];
-            for (path_points) |pt| {
-                self.vertices.appendAssumeCapacity(vertexFromPoint(pt));
+            self.appendFillVertices(path_points, fringe_width);
+            const fill_count = self.vertices.items.len - start;
+            var fringe: Range = .{};
+            if (self.antialias) {
+                const fringe_start = self.vertices.items.len;
+                self.appendFillFringe(path_points, fringe_width);
+                fringe = .{
+                    .start = @intCast(fringe_start),
+                    .count = @intCast(self.vertices.items.len - fringe_start),
+                };
             }
             self.paths.appendAssumeCapacity(.{
-                .vertices = .{ .start = @intCast(start), .count = p.point_count },
+                .vertices = .{ .start = @intCast(start), .count = @intCast(fill_count) },
+                .fringe = fringe,
                 .winding = p.winding,
                 .closed = p.closed,
                 .convex = p.convex,
@@ -187,6 +207,7 @@ pub const Backend = struct {
             .paths = .{ .start = @intCast(call_path_start), .count = @intCast(valid_path_count) },
             .vertices = .{ .start = @intCast(call_vertex_start), .count = @intCast(total_vertices) },
             .cover = cover,
+            .antialias = self.antialias,
         });
     }
 
@@ -259,6 +280,60 @@ pub const Backend = struct {
         self.vertices.appendAssumeCapacity(.{ .x = bounds[2], .y = bounds[1], .u = 0.5, .v = 1.0 });
         self.vertices.appendAssumeCapacity(.{ .x = bounds[0], .y = bounds[3], .u = 0.5, .v = 1.0 });
         self.vertices.appendAssumeCapacity(.{ .x = bounds[0], .y = bounds[1], .u = 0.5, .v = 1.0 });
+    }
+
+    fn fillVertexCount(self: *const Backend, point_count: u32) usize {
+        var count: usize = point_count;
+        if (self.antialias) {
+            count += @as(usize, point_count) * 2 + 2;
+        }
+        return count;
+    }
+
+    fn fringeWidth(self: *const Backend) f32 {
+        return 1.0 / if (self.viewport_dpr > 0) self.viewport_dpr else 1.0;
+    }
+
+    fn appendFillVertices(self: *Backend, pts: []const Point, fringe_width: f32) void {
+        if (!self.antialias) {
+            for (pts) |pt| {
+                self.vertices.appendAssumeCapacity(vertexFromPoint(pt));
+            }
+            return;
+        }
+
+        const woff = fringe_width * 0.5;
+        for (pts) |pt| {
+            self.vertices.appendAssumeCapacity(.{
+                .x = pt.x + pt.dmx * woff,
+                .y = pt.y + pt.dmy * woff,
+                .u = 0.5,
+                .v = 1.0,
+            });
+        }
+    }
+
+    fn appendFillFringe(self: *Backend, pts: []const Point, fringe_width: f32) void {
+        const woff = fringe_width * 0.5;
+        for (pts) |pt| {
+            appendFringePair(self, pt, woff);
+        }
+        appendFringePair(self, pts[0], woff);
+    }
+
+    fn appendFringePair(self: *Backend, pt: Point, woff: f32) void {
+        self.vertices.appendAssumeCapacity(.{
+            .x = pt.x + pt.dmx * woff,
+            .y = pt.y + pt.dmy * woff,
+            .u = 0.5,
+            .v = 1.0,
+        });
+        self.vertices.appendAssumeCapacity(.{
+            .x = pt.x - pt.dmx * woff,
+            .y = pt.y - pt.dmy * woff,
+            .u = 0.0,
+            .v = 1.0,
+        });
     }
 };
 

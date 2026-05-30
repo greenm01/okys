@@ -9,6 +9,8 @@ const Vertex = okys.types.path.Vertex;
 const stencil = okys.systems.backend_stencil;
 const Backend = stencil.Backend;
 
+const OKY_ANTIALIAS: u32 = 1 << 0;
+
 const disabled_scissor: color.Scissor = .{
     .xform = .{ 0, 0, 0, 0, 0, 0 },
     .extent = .{ -1, -1 },
@@ -62,6 +64,60 @@ test "stencil replay emits even odd draw from indexed fill op" {
     try testing.expectEqual(@as(u32, 0), backend.stencil_draws.items[0].base_element);
     try testing.expectEqual(@as(u32, 3), backend.stencil_draws.items[0].element_count);
     try testing.expectEqual(.stencil_even_odd, backend.path_draws.items[0].kind);
+}
+
+test "stencil replay keeps antialiased fringe between stencil fill and cover" {
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_ANTIALIAS);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0, .dmx = 1, .dmy = 0 },
+        .{ .x = 10, .y = 0, .dmx = 0, .dmy = 1 },
+        .{ .x = 10, .y = 10, .dmx = -1, .dmy = 0 },
+        .{ .x = 0, .y = 10, .dmx = 0, .dmy = -1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = false }};
+
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 0, 0, 10, 10 }, &paths, &points);
+    try testing.expect(backend.buildStencilPass());
+
+    try testing.expectEqual(@as(usize, 1), backend.stencil_draws.items.len);
+    try testing.expectEqual(@as(usize, 1), backend.cover_draws.items.len);
+    try testing.expectEqual(@as(usize, 3), backend.path_draws.items.len);
+    try testing.expectEqual(.stencil_nonzero, backend.path_draws.items[0].kind);
+    try testing.expectEqual(.fringe_stencil, backend.path_draws.items[1].kind);
+    try testing.expectEqual(.cover, backend.path_draws.items[2].kind);
+    try testing.expectEqual(@as(u32, 8), backend.path_draws.items[1].base_element);
+    try testing.expectEqual(@as(u32, 10), backend.path_draws.items[1].element_count);
+    try testing.expectEqual(@as(f32, 1), backend.frag_params.items[0].params[0]);
+}
+
+test "stencil replay emits antialiased convex fill then fringe" {
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_ANTIALIAS);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0, .dmx = 1, .dmy = 0 },
+        .{ .x = 10, .y = 0, .dmx = 0, .dmy = 1 },
+        .{ .x = 0, .y = 10, .dmx = -1, .dmy = 0 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
+
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 0, 0, 10, 10 }, &paths, &points);
+    try testing.expect(backend.buildStencilPass());
+
+    try testing.expectEqual(@as(usize, 0), backend.stencil_draws.items.len);
+    try testing.expectEqual(@as(usize, 0), backend.cover_draws.items.len);
+    try testing.expectEqual(@as(usize, 2), backend.path_draws.items.len);
+    try testing.expectEqual(.convex, backend.path_draws.items[0].kind);
+    try testing.expectEqual(.fringe, backend.path_draws.items[1].kind);
+    try testing.expectEqual(@as(u32, 3), backend.path_draws.items[1].base_element);
+    try testing.expectEqual(@as(u32, 8), backend.path_draws.items[1].element_count);
+    try testing.expectEqual(@as(f32, 1), backend.frag_params.items[0].params[0]);
 }
 
 test "stencil replay keeps direct draws out of grouped stencil and cover lists" {

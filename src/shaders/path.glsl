@@ -68,11 +68,19 @@ float scissorMask(vec2 p) {
     return clamp(sc.x, 0.0, 1.0) * clamp(sc.y, 0.0, 1.0);
 }
 
+float edgeMask(vec2 uv) {
+    if (params.x <= 0.0) {
+        return 1.0;
+    }
+    float alpha = 1.0 - abs(uv.x * 2.0 - 1.0);
+    return clamp(alpha * params.x, 0.0, 1.0) * clamp(uv.y, 0.0, 1.0);
+}
+
 void main() {
     vec2 pt = (paintMat() * vec3(frag_pos, 1.0)).xy;
     float feather = max(extent_radius_feather.w, 0.0001);
     float d = clamp((sdroundrect(pt, extent_radius_feather.xy, extent_radius_feather.z) + feather * 0.5) / feather, 0.0, 1.0);
-    frag_color = mix(inner_color, outer_color, d) * scissorMask(frag_pos);
+    frag_color = mix(inner_color, outer_color, d) * scissorMask(frag_pos) * edgeMask(frag_uv);
 }
 @end
 

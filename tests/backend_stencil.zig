@@ -10,6 +10,8 @@ const Vertex = okys.types.path.Vertex;
 const Backend = okys.systems.backend_stencil.Backend;
 const CallType = okys.systems.backend_stencil.CallType;
 
+const OKY_ANTIALIAS: u32 = 1 << 0;
+
 const default_scissor: color.Scissor = .{
     .xform = .{ 1, 0, 0, 1, 0, 0 },
     .extent = .{ -1, -1 },
@@ -90,6 +92,58 @@ test "stencil backend queues convex fill without cover quad" {
     try testing.expectEqual(CallType.fill_convex, backend.calls.items[0].call_type);
     try testing.expectEqual(@as(u32, 0), backend.calls.items[0].cover.count);
     try testing.expectEqual(@as(usize, 3), backend.vertices.items.len);
+}
+
+test "stencil backend queues antialiased non-convex fill fringe" {
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_ANTIALIAS);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 100, 100, 2);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0, .dmx = 1, .dmy = 0 },
+        .{ .x = 10, .y = 0, .dmx = 0, .dmy = 1 },
+        .{ .x = 10, .y = 10, .dmx = -1, .dmy = 0 },
+        .{ .x = 0, .y = 10, .dmx = 0, .dmy = -1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = false }};
+
+    iface.fill(iface.ctx, &paint, &default_scissor, .{ 0, 0, 10, 10 }, &paths, &points);
+
+    try testing.expectEqual(CallType.fill, backend.calls.items[0].call_type);
+    try testing.expectEqual(@as(u32, 18), backend.calls.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 4), backend.paths.items[0].vertices.start);
+    try testing.expectEqual(@as(u32, 4), backend.paths.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 8), backend.paths.items[0].fringe.start);
+    try testing.expectEqual(@as(u32, 10), backend.paths.items[0].fringe.count);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), backend.vertices.items[4].x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), backend.vertices.items[8].x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, -0.25), backend.vertices.items[9].x, 0.001);
+}
+
+test "stencil backend queues antialiased convex fill fringe" {
+    const backend = try Backend.createWithFlags(testing.allocator, OKY_ANTIALIAS);
+    defer backend.destroy();
+    const iface = backend.interface();
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 0, .y = 0, .dmx = 1, .dmy = 0 },
+        .{ .x = 10, .y = 0, .dmx = 0, .dmy = 1 },
+        .{ .x = 0, .y = 10, .dmx = -1, .dmy = 0 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 3, .closed = true, .convex = true }};
+
+    iface.fill(iface.ctx, &paint, &default_scissor, .{ 0, 0, 10, 10 }, &paths, &points);
+
+    try testing.expectEqual(CallType.fill_convex, backend.calls.items[0].call_type);
+    try testing.expectEqual(@as(u32, 0), backend.calls.items[0].cover.count);
+    try testing.expectEqual(@as(u32, 11), backend.calls.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 0), backend.paths.items[0].vertices.start);
+    try testing.expectEqual(@as(u32, 3), backend.paths.items[0].vertices.count);
+    try testing.expectEqual(@as(u32, 3), backend.paths.items[0].fringe.start);
+    try testing.expectEqual(@as(u32, 8), backend.paths.items[0].fringe.count);
 }
 
 test "stencil backend drops degenerate fill paths" {

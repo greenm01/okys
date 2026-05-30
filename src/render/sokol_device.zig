@@ -35,6 +35,8 @@ pub const PathPipelineKind = enum {
     stencil_even_odd,
     cover,
     convex,
+    fringe_stencil,
+    fringe,
     triangles,
 };
 
@@ -43,6 +45,8 @@ pub const PathDrawKind = enum {
     stencil_even_odd,
     cover,
     convex,
+    fringe_stencil,
+    fringe,
     triangles,
 };
 
@@ -93,6 +97,8 @@ pub const Device = struct {
     path_stencil_even_odd_pipeline: Pipeline = .{},
     path_cover_pipeline: Pipeline = .{},
     path_convex_pipeline: Pipeline = .{},
+    path_fringe_stencil_pipeline: Pipeline = .{},
+    path_fringe_pipeline: Pipeline = .{},
     path_triangles_pipeline: Pipeline = .{},
     path_vertex_buffer: Buffer = .{},
     path_index_buffer: Buffer = .{},
@@ -159,6 +165,8 @@ pub const Device = struct {
         self.path_stencil_even_odd_pipeline = sg.makePipeline(pathPipelineDesc(self.path_stencil_shader, .stencil_even_odd));
         self.path_cover_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .cover));
         self.path_convex_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .convex));
+        self.path_fringe_stencil_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .fringe_stencil));
+        self.path_fringe_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .fringe));
         self.path_triangles_pipeline = sg.makePipeline(pathPipelineDesc(self.path_cover_shader, .triangles));
         self.path_vertex_buffer = sg.makeBuffer(pathVertexBufferDesc(vertex_count));
         self.path_index_buffer = sg.makeBuffer(pathIndexBufferDesc(index_count));
@@ -170,6 +178,14 @@ pub const Device = struct {
         if (self.path_triangles_pipeline.id != 0) {
             sg.destroyPipeline(self.path_triangles_pipeline);
             self.path_triangles_pipeline = .{};
+        }
+        if (self.path_fringe_pipeline.id != 0) {
+            sg.destroyPipeline(self.path_fringe_pipeline);
+            self.path_fringe_pipeline = .{};
+        }
+        if (self.path_fringe_stencil_pipeline.id != 0) {
+            sg.destroyPipeline(self.path_fringe_stencil_pipeline);
+            self.path_fringe_stencil_pipeline = .{};
         }
         if (self.path_convex_pipeline.id != 0) {
             sg.destroyPipeline(self.path_convex_pipeline);
@@ -331,7 +347,7 @@ pub const Device = struct {
             sg.applyBindings(if (indexed) indexed_bindings else vertex_bindings);
             sg.applyUniforms(path_vs_params_slot, rangeFromValue(PathVsParams, &params));
             switch (draw.kind) {
-                .cover, .convex, .triangles => {
+                .cover, .convex, .fringe_stencil, .fringe, .triangles => {
                     const uniform_index: usize = @intCast(draw.uniform_index);
                     if (uniform_index >= frag_params.len) continue;
                     sg.applyUniforms(path_fs_params_slot, rangeFromValue(PathFsParams, &frag_params[uniform_index]));
@@ -359,6 +375,8 @@ pub const Device = struct {
             self.path_stencil_even_odd_pipeline.id == 0 or
             self.path_cover_pipeline.id == 0 or
             self.path_convex_pipeline.id == 0 or
+            self.path_fringe_stencil_pipeline.id == 0 or
+            self.path_fringe_pipeline.id == 0 or
             self.path_triangles_pipeline.id == 0 or
             self.path_vertex_buffer.id == 0 or
             self.path_index_buffer.id == 0;
@@ -374,6 +392,8 @@ pub const Device = struct {
             .stencil_even_odd => self.path_stencil_even_odd_pipeline,
             .cover => self.path_cover_pipeline,
             .convex => self.path_convex_pipeline,
+            .fringe_stencil => self.path_fringe_stencil_pipeline,
+            .fringe => self.path_fringe_pipeline,
             .triangles => self.path_triangles_pipeline,
         };
     }
@@ -515,6 +535,17 @@ pub fn pathPipelineDesc(shader: Shader, kind: PathPipelineKind) PipelineDesc {
             desc.colors[0].blend = alphaBlend();
             desc.label = "okys_path_convex_pipeline";
         },
+        .fringe_stencil => {
+            desc.primitive_type = .TRIANGLE_STRIP;
+            desc.stencil = stencilReadState(.EQUAL);
+            desc.colors[0].blend = alphaBlend();
+            desc.label = "okys_path_fringe_stencil_pipeline";
+        },
+        .fringe => {
+            desc.primitive_type = .TRIANGLE_STRIP;
+            desc.colors[0].blend = alphaBlend();
+            desc.label = "okys_path_fringe_pipeline";
+        },
         .triangles => {
             desc.primitive_type = .TRIANGLES;
             desc.colors[0].blend = alphaBlend();
@@ -565,11 +596,17 @@ fn stencilState(compare: sg.CompareFunc, front_pass: sg.StencilOp, back_pass: sg
     };
 }
 
+fn stencilReadState(compare: sg.CompareFunc) sg.StencilState {
+    var state = stencilState(compare, .KEEP, .KEEP);
+    state.write_mask = 0;
+    return state;
+}
+
 fn needsIndexBuffer(draws: []const PathDraw) bool {
     for (draws) |draw| {
         switch (draw.kind) {
             .stencil_nonzero, .stencil_even_odd, .convex => return true,
-            .cover, .triangles => {},
+            .cover, .fringe_stencil, .fringe, .triangles => {},
         }
     }
     return false;
@@ -579,7 +616,7 @@ fn stencilDrawKind(mode: PathPipelineKind) ?PathDrawKind {
     return switch (mode) {
         .stencil_nonzero => .stencil_nonzero,
         .stencil_even_odd => .stencil_even_odd,
-        .cover, .convex, .triangles => null,
+        .cover, .convex, .fringe_stencil, .fringe, .triangles => null,
     };
 }
 
