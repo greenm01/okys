@@ -9,6 +9,11 @@ const Point = okys.types.path.Point;
 const Vertex = okys.types.path.Vertex;
 const sparse = okys.systems.backend_sparse_strip;
 const Backend = sparse.Backend;
+const Context = okys.state.context.Context;
+const frame_ops = okys.ops.frame;
+const paint_ops = okys.ops.paint;
+const path_ops = okys.ops.path;
+const render_ops = okys.ops.render;
 
 const disabled_scissor: color.Scissor = .{
     .xform = .{ 0, 0, 0, 0, 0, 0 },
@@ -88,6 +93,22 @@ test "sparse fine stage covers solid rect interior and leaves exterior empty" {
     try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 1, 1));
 }
 
+test "sparse fine stage uses analytic subpixel coverage" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, 4.25, 4.25, 12.25, 12.25);
+    try testing.expect(backend.build());
+
+    const strip = findStrip(backend, 0, 0, 0).?;
+    try expectAlphaApprox(143, alphaAt(backend, strip, 4, 4));
+    try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 5, 5));
+    try expectAlphaApprox(16, alphaAt(backend, strip, 12, 12));
+    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 3, 4));
+}
+
 test "sparse even odd coverage cuts a hole from nested paths" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
@@ -116,6 +137,79 @@ test "sparse even odd coverage cuts a hole from nested paths" {
     const strip = findStrip(backend, 0, 0, 0).?;
     try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 4, 4));
     try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 10, 10));
+}
+
+test "sparse even odd coverage folds self-overlapping path area" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    backend.fill_rule = .even_odd;
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 4, .y = 4 },
+        .{ .x = 18, .y = 4 },
+        .{ .x = 18, .y = 18 },
+        .{ .x = 4, .y = 18 },
+        .{ .x = 4, .y = 4 },
+        .{ .x = 18, .y = 4 },
+        .{ .x = 18, .y = 18 },
+        .{ .x = 4, .y = 18 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 8, .closed = true, .convex = false }};
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 4, 4, 18, 18 }, &paths, &points);
+    try testing.expect(backend.build());
+
+    const strip = findStrip(backend, 0, 0, 0).?;
+    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 8, 8));
+}
+
+test "sparse solid paint composites into proof surface" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 4, 4, 20, 20);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 255, 0, 0, 255 }, rgbaAt(backend, 8, 8));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 2, 2));
+}
+
+test "sparse solid paint composites calls in draw order" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 4, 4, 20, 20);
+    queuePaintedRect(&iface, color.rgbaf(0, 0, 1, 0.5), 4, 4, 20, 20);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 128, 0, 128, 255 }, rgbaAt(backend, 8, 8));
+}
+
+test "sparse frontend curve renders through analytic proof path" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+
+    frame_ops.beginFrame(ctx, 32, 32, 1);
+    paint_ops.fillColor(ctx, color.rgbaf(0, 1, 0, 1));
+    path_ops.beginPath(ctx);
+    path_ops.moveTo(ctx, 4, 22);
+    path_ops.bezierTo(ctx, 7, 4, 25, 4, 28, 22);
+    path_ops.lineTo(ctx, 16, 28);
+    path_ops.closePath(ctx);
+    render_ops.fill(ctx);
+
+    try testing.expect(backend.build());
+    try testing.expect(backend.strips.items.len > 0);
+    try testing.expect(backend.alphas.items.len > 0);
+    try testing.expect(rgbaAt(backend, 16, 18)[1] > 0);
 }
 
 test "sparse backend queues stroke outlines as path segments" {
@@ -171,7 +265,11 @@ test "sparse triangle input encodes one closed triangle segment set" {
 }
 
 fn queueRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f32, x1: f32, y1: f32) void {
-    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    queuePaintedRect(iface, color.rgbaf(1, 1, 1, 1), x0, y0, x1, y1);
+}
+
+fn queuePaintedRect(iface: *const okys.render.interface.RenderInterface, c: color.Color, x0: f32, y0: f32, x1: f32, y1: f32) void {
+    const paint = color.solid(c);
     const points = [_]Point{
         .{ .x = x0, .y = y0 },
         .{ .x = x1, .y = y0 },
@@ -195,4 +293,15 @@ fn findStrip(backend: *const Backend, x: u16, y: u16, call_index: u32) ?sparse.S
         if (s.x == x and s.y == y and s.call_index == call_index) return s;
     }
     return null;
+}
+
+fn rgbaAt(backend: *const Backend, x: u32, y: u32) [4]u8 {
+    const width: u32 = @intFromFloat(@ceil(backend.viewport_width));
+    const index = (@as(usize, y) * @as(usize, width) + x) * 4;
+    return backend.surface.items[index..][0..4].*;
+}
+
+fn expectAlphaApprox(expected: u8, actual: u8) !void {
+    const delta = @abs(@as(i16, expected) - @as(i16, actual));
+    try testing.expect(delta <= 1);
 }

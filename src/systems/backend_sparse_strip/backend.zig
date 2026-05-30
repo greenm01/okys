@@ -34,6 +34,7 @@ pub const Backend = struct {
     strips: std.ArrayList(Strip) = .empty,
     strip_segment_indices: std.ArrayList(u32) = .empty,
     alphas: std.ArrayList(u8) = .empty,
+    surface: std.ArrayList(u8) = .empty,
     textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
 
     viewport_width: f32 = 0,
@@ -56,6 +57,7 @@ pub const Backend = struct {
         self.strips.deinit(gpa);
         self.strip_segment_indices.deinit(gpa);
         self.alphas.deinit(gpa);
+        self.surface.deinit(gpa);
         self.textures.deinit(gpa);
         gpa.destroy(self);
     }
@@ -85,7 +87,18 @@ pub const Backend = struct {
     pub fn build(self: *Backend) bool {
         bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles) catch return false;
         coarse.build(self.gpa, self.tiles.items, &self.strips, &self.strip_segment_indices) catch return false;
-        fine.build(self.gpa, self.fill_rule, self.segments.items, self.strip_segment_indices.items, &self.strips, &self.alphas) catch return false;
+        fine.build(
+            self.gpa,
+            self.fill_rule,
+            self.viewport_width,
+            self.viewport_height,
+            self.calls.items,
+            self.segments.items,
+            self.strip_segment_indices.items,
+            &self.strips,
+            &self.alphas,
+            &self.surface,
+        ) catch return false;
         return true;
     }
 
