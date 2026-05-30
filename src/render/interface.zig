@@ -18,9 +18,10 @@ pub const RenderInterface = struct {
     ctx: *anyopaque,
 
     // device + textures
-    create_texture: *const fn (ctx: *anyopaque, w: u32, h: u32, fmt: TexFormat, data: ?[]const u8) ImageId,
+    create_texture: *const fn (ctx: *anyopaque, id: ImageId, w: u32, h: u32, fmt: TexFormat, data: ?[]const u8) bool,
     update_texture: *const fn (ctx: *anyopaque, id: ImageId, x: u32, y: u32, w: u32, h: u32, data: []const u8) void,
     delete_texture: *const fn (ctx: *anyopaque, id: ImageId) void,
+    texture_size: *const fn (ctx: *anyopaque, id: ImageId) ?[2]u32,
     viewport: *const fn (ctx: *anyopaque, width: f32, height: f32, dpr: f32) void,
     flush: *const fn (ctx: *anyopaque) void,
     deinit: *const fn (ctx: *anyopaque) void,

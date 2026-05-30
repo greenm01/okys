@@ -123,6 +123,13 @@ OKYpaint okyBoxGradient(OKYcontext *ctx, float x, float y, float w, float h,
 OKYpaint okyImagePattern(OKYcontext *ctx, float ox, float oy, float ex,
                          float ey, float angle, int image, float alpha);
 
+/* --- images ------------------------------------------------------------ */
+int okyCreateImageRGBA(OKYcontext *ctx, int w, int h,
+                       const unsigned char *data);
+void okyUpdateImage(OKYcontext *ctx, int image, const unsigned char *data);
+void okyImageSize(OKYcontext *ctx, int image, int *w, int *h);
+void okyDeleteImage(OKYcontext *ctx, int image);
+
 /* --- scissor ----------------------------------------------------------- */
 void okyScissor(OKYcontext *ctx, float x, float y, float w, float h);
 void okyIntersectScissor(OKYcontext *ctx, float x, float y, float w, float h);

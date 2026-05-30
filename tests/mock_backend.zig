@@ -30,10 +30,22 @@ pub const MockBackend = struct {
     create_texture_calls: usize = 0,
     update_texture_calls: usize = 0,
     delete_texture_calls: usize = 0,
+    texture_size_calls: usize = 0,
+    fail_create_texture: bool = false,
 
     viewport_width: f32 = 0,
     viewport_height: f32 = 0,
     viewport_dpr: f32 = 0,
+    last_texture_id: ImageId = .none,
+    last_texture_width: u32 = 0,
+    last_texture_height: u32 = 0,
+    last_texture_format: TexFormat = .rgba8,
+    last_texture_data_len: usize = 0,
+    last_update_id: ImageId = .none,
+    last_update_width: u32 = 0,
+    last_update_height: u32 = 0,
+    last_update_data_len: usize = 0,
+    last_deleted_id: ImageId = .none,
     last_fill: DrawCall = .{},
     last_stroke: DrawCall = .{},
 
@@ -43,6 +55,7 @@ pub const MockBackend = struct {
             .create_texture = createTexture,
             .update_texture = updateTexture,
             .delete_texture = deleteTexture,
+            .texture_size = textureSize,
             .viewport = viewport,
             .flush = flush,
             .deinit = deinit,
@@ -56,29 +69,39 @@ pub const MockBackend = struct {
         return @ptrCast(@alignCast(ctx));
     }
 
-    fn createTexture(ctx: *anyopaque, w: u32, h: u32, fmt: TexFormat, data: ?[]const u8) ImageId {
-        _ = w;
-        _ = h;
-        _ = fmt;
-        _ = data;
+    fn createTexture(ctx: *anyopaque, id: ImageId, w: u32, h: u32, fmt: TexFormat, data: ?[]const u8) bool {
         const self = from(ctx);
         self.create_texture_calls += 1;
-        return @enumFromInt(self.create_texture_calls);
+        self.last_texture_id = id;
+        self.last_texture_width = w;
+        self.last_texture_height = h;
+        self.last_texture_format = fmt;
+        self.last_texture_data_len = if (data) |bytes| bytes.len else 0;
+        return !self.fail_create_texture;
     }
 
     fn updateTexture(ctx: *anyopaque, id: ImageId, x: u32, y: u32, w: u32, h: u32, data: []const u8) void {
-        _ = id;
         _ = x;
         _ = y;
-        _ = w;
-        _ = h;
-        _ = data;
-        from(ctx).update_texture_calls += 1;
+        const self = from(ctx);
+        self.update_texture_calls += 1;
+        self.last_update_id = id;
+        self.last_update_width = w;
+        self.last_update_height = h;
+        self.last_update_data_len = data.len;
     }
 
     fn deleteTexture(ctx: *anyopaque, id: ImageId) void {
-        _ = id;
-        from(ctx).delete_texture_calls += 1;
+        const self = from(ctx);
+        self.delete_texture_calls += 1;
+        self.last_deleted_id = id;
+    }
+
+    fn textureSize(ctx: *anyopaque, id: ImageId) ?[2]u32 {
+        const self = from(ctx);
+        self.texture_size_calls += 1;
+        if (self.last_texture_id != id) return null;
+        return .{ self.last_texture_width, self.last_texture_height };
     }
 
     fn viewport(ctx: *anyopaque, width: f32, height: f32, dpr: f32) void {

@@ -14,6 +14,7 @@ const LineJoin = draw_state.LineJoin;
 const Winding = @import("types/path.zig").Winding;
 
 const frame = @import("ops/frame_ops.zig");
+const image_ops = @import("ops/image_ops.zig");
 const paths = @import("ops/path_ops.zig");
 const paint = @import("ops/paint_ops.zig");
 const render_ops = @import("ops/render_ops.zig");
@@ -176,6 +177,42 @@ export fn okyImagePattern(ctx: ?*Context, ox: f32, oy: f32, ex: f32, ey: f32, an
     return std.mem.zeroes(Paint);
 }
 
+// --- images ---------------------------------------------------------------
+
+export fn okyCreateImageRGBA(ctx: ?*Context, w: c_int, h: c_int, data: ?[*]const u8) c_int {
+    if (ctx == null or w <= 0 or h <= 0) return 0;
+
+    const width: u32 = @intCast(w);
+    const height: u32 = @intCast(h);
+    const len = rgbaLen(width, height);
+    const bytes: ?[]const u8 = if (data) |ptr| ptr[0..len] else null;
+    return @intCast(@intFromEnum(image_ops.createImageRGBA(ctx.?, width, height, bytes)));
+}
+
+export fn okyUpdateImage(ctx: ?*Context, image: c_int, data: ?[*]const u8) void {
+    if (ctx == null or image <= 0 or data == null) return;
+
+    const id = imageIdFromInt(image);
+    const size = image_ops.imageSize(ctx.?, id) orelse return;
+    const len = rgbaLen(size[0], size[1]);
+    image_ops.updateImage(ctx.?, id, data.?[0..len]);
+}
+
+export fn okyImageSize(ctx: ?*Context, image: c_int, w: ?*c_int, h: ?*c_int) void {
+    if (w) |out_w| out_w.* = 0;
+    if (h) |out_h| out_h.* = 0;
+    if (ctx == null or image <= 0) return;
+
+    const size = image_ops.imageSize(ctx.?, imageIdFromInt(image)) orelse return;
+    if (w) |out_w| out_w.* = @intCast(size[0]);
+    if (h) |out_h| out_h.* = @intCast(size[1]);
+}
+
+export fn okyDeleteImage(ctx: ?*Context, image: c_int) void {
+    if (ctx == null or image <= 0) return;
+    image_ops.deleteImage(ctx.?, imageIdFromInt(image));
+}
+
 // --- scissor ---------------------------------------------------------------
 
 export fn okyScissor(ctx: ?*Context, x: f32, y: f32, w: f32, h: f32) void {
@@ -279,4 +316,12 @@ fn windingFromInt(dir: c_int) Winding {
         2 => .cw,
         else => .ccw,
     };
+}
+
+fn imageIdFromInt(id: c_int) @import("types/image.zig").ImageId {
+    return @enumFromInt(@as(u32, @intCast(id)));
+}
+
+fn rgbaLen(w: u32, h: u32) usize {
+    return @as(usize, w) * @as(usize, h) * 4;
 }

@@ -48,6 +48,22 @@ int main(void) {
     assert(ip.image == 7);
     okyFillPaint(ctx, lg);
     okyStrokePaint(ctx, rg);
+
+    unsigned char pixels[16] = {
+        255, 0,   0,   255,
+        0,   255, 0,   255,
+        0,   0,   255, 255,
+        255, 255, 255, 255,
+    };
+    int image = okyCreateImageRGBA(ctx, 2, 2, pixels);
+    assert(image == 0);
+    int image_w = 123;
+    int image_h = 456;
+    okyImageSize(ctx, image, &image_w, &image_h);
+    assert(image_w == 0 && image_h == 0);
+    okyUpdateImage(ctx, image, pixels);
+    okyDeleteImage(ctx, image);
+
     okyScissor(ctx, 0.0f, 0.0f, 200.0f, 200.0f);
     okyIntersectScissor(ctx, 50.0f, 50.0f, 100.0f, 100.0f);
     okyResetScissor(ctx);

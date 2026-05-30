@@ -64,6 +64,11 @@ proc okyRadialGradient(ctx: ptr OKYcontext; cx, cy, innerRadius, outerRadius: cf
 proc okyBoxGradient(ctx: ptr OKYcontext; x, y, w, h, radius, feather: cfloat; inner, outer: OKYcolor): OKYpaint {.importc, header: "okys.h".}
 proc okyImagePattern(ctx: ptr OKYcontext; ox, oy, ex, ey, angle: cfloat; image: cint; alpha: cfloat): OKYpaint {.importc, header: "okys.h".}
 
+proc okyCreateImageRGBA(ctx: ptr OKYcontext; w, h: cint; data: ptr uint8): cint {.importc, header: "okys.h".}
+proc okyUpdateImage(ctx: ptr OKYcontext; image: cint; data: ptr uint8) {.importc, header: "okys.h".}
+proc okyImageSize(ctx: ptr OKYcontext; image: cint; w, h: ptr cint) {.importc, header: "okys.h".}
+proc okyDeleteImage(ctx: ptr OKYcontext; image: cint) {.importc, header: "okys.h".}
+
 proc okyScissor(ctx: ptr OKYcontext; x, y, w, h: cfloat) {.importc, header: "okys.h".}
 proc okyIntersectScissor(ctx: ptr OKYcontext; x, y, w, h: cfloat) {.importc, header: "okys.h".}
 proc okyResetScissor(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
@@ -132,6 +137,21 @@ doAssert bg.extent[0] > 0.0
 doAssert ip.image == 7
 okyFillPaint(ctx, lg)
 okyStrokePaint(ctx, rg)
+
+var pixels = [
+  255'u8, 0'u8, 0'u8, 255'u8,
+  0'u8, 255'u8, 0'u8, 255'u8,
+  0'u8, 0'u8, 255'u8, 255'u8,
+  255'u8, 255'u8, 255'u8, 255'u8,
+]
+let image = okyCreateImageRGBA(ctx, 2, 2, addr pixels[0])
+doAssert image == 0
+var imageW: cint = 123
+var imageH: cint = 456
+okyImageSize(ctx, image, addr imageW, addr imageH)
+doAssert imageW == 0 and imageH == 0
+okyUpdateImage(ctx, image, addr pixels[0])
+okyDeleteImage(ctx, image)
 
 okyScissor(ctx, 0.0, 0.0, 200.0, 200.0)
 okyIntersectScissor(ctx, 50.0, 50.0, 100.0, 100.0)

@@ -1,17 +1,56 @@
 //! Image verbs. These route to the backend's texture upload and the texture
-//! table once a backend exists. Stubbed for now.
+//! table. Allocation is allowed here; images are long-lived resources.
 
 const Context = @import("../state/context.zig").Context;
-const ImageId = @import("../types/image.zig").ImageId;
+const image = @import("../types/image.zig");
+const ImageId = image.ImageId;
+const TexFormat = image.TexFormat;
 
-pub fn createImage(ctx: *Context, w: u32, h: u32) ImageId {
-    _ = ctx;
-    _ = w;
-    _ = h;
-    return .none; // TODO
+pub fn createImageRGBA(ctx: *Context, w: u32, h: u32, data: ?[]const u8) ImageId {
+    if (w == 0 or h == 0) return .none;
+    if (data) |bytes| {
+        if (bytes.len != byteLen(w, h, .rgba8)) return .none;
+    }
+
+    const backend = ctx.backend orelse return .none;
+    const id = ctx.textures.create(w, h, .rgba8) catch return .none;
+    if (!backend.create_texture(backend.ctx, id, w, h, .rgba8, data)) {
+        _ = ctx.textures.remove(id);
+        return .none;
+    }
+    return id;
+}
+
+pub fn updateImage(ctx: *Context, id: ImageId, data: []const u8) void {
+    const texture = ctx.textures.get(id) orelse return;
+    if (data.len != byteLen(texture.width, texture.height, texture.format)) return;
+
+    const backend = ctx.backend orelse return;
+    backend.update_texture(backend.ctx, id, 0, 0, texture.width, texture.height, data);
+}
+
+pub fn imageSize(ctx: *Context, id: ImageId) ?[2]u32 {
+    const table_size = ctx.textures.size(id) orelse return null;
+    if (ctx.backend) |backend| {
+        if (backend.texture_size(backend.ctx, id)) |size| return size;
+    }
+    return table_size;
 }
 
 pub fn deleteImage(ctx: *Context, id: ImageId) void {
-    _ = ctx;
-    _ = id;
+    if (id == .none) return;
+    if (ctx.textures.get(id) == null) return;
+
+    if (ctx.backend) |backend| {
+        backend.delete_texture(backend.ctx, id);
+    }
+    _ = ctx.textures.remove(id);
+}
+
+fn byteLen(w: u32, h: u32, format: TexFormat) usize {
+    const pixels: usize = @as(usize, w) * @as(usize, h);
+    return switch (format) {
+        .rgba8 => pixels * 4,
+        .a8 => pixels,
+    };
 }
