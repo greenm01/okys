@@ -9,14 +9,17 @@ pub fn build(
     gpa: std.mem.Allocator,
     draw_ops: []const draw_plan.DrawOp,
     uniforms: []const draw_plan.PaintUniform,
+    path_draws: *std.ArrayList(sokol_device.PathDraw),
     stencil_draws: *std.ArrayList(sokol_device.StencilDraw),
     cover_draws: *std.ArrayList(sokol_device.CoverDraw),
     frag_params: *std.ArrayList(sokol_device.PathFsParams),
 ) !void {
+    path_draws.clearRetainingCapacity();
     stencil_draws.clearRetainingCapacity();
     cover_draws.clearRetainingCapacity();
     frag_params.clearRetainingCapacity();
 
+    try path_draws.ensureUnusedCapacity(gpa, countPathDraws(draw_ops));
     try stencil_draws.ensureUnusedCapacity(gpa, countStencilDraws(draw_ops));
     try cover_draws.ensureUnusedCapacity(gpa, countCoverDraws(draw_ops));
     try frag_params.ensureUnusedCapacity(gpa, uniforms.len);
@@ -24,6 +27,7 @@ pub fn build(
     for (uniforms) |uniform| {
         frag_params.appendAssumeCapacity(packFragmentParams(uniform));
     }
+    appendPathDraws(draw_ops, path_draws);
     appendStencilDraws(draw_ops, stencil_draws);
     appendCoverDraws(draw_ops, cover_draws);
 }
@@ -36,6 +40,49 @@ pub fn buildStencilDraws(
     draws.clearRetainingCapacity();
     try draws.ensureUnusedCapacity(gpa, countStencilDraws(draw_ops));
     appendStencilDraws(draw_ops, draws);
+}
+
+fn appendPathDraws(
+    draw_ops: []const draw_plan.DrawOp,
+    draws: *std.ArrayList(sokol_device.PathDraw),
+) void {
+    for (draw_ops) |op| {
+        switch (op.kind) {
+            .stencil_fill => {
+                if (op.indices.count == 0) continue;
+                const kind = switch (op.stencil_mode) {
+                    .nonzero => sokol_device.PathDrawKind.stencil_nonzero,
+                    .even_odd => sokol_device.PathDrawKind.stencil_even_odd,
+                    .none => continue,
+                };
+                draws.appendAssumeCapacity(.{
+                    .kind = kind,
+                    .base_element = op.indices.start,
+                    .element_count = op.indices.count,
+                    .uniform_index = op.uniform_index,
+                });
+            },
+            .cover_fill => {
+                if (op.vertices.count == 0) continue;
+                draws.appendAssumeCapacity(.{
+                    .kind = .cover,
+                    .base_element = op.vertices.start,
+                    .element_count = op.vertices.count,
+                    .uniform_index = op.uniform_index,
+                });
+            },
+            .convex_fill => {
+                if (op.indices.count == 0) continue;
+                draws.appendAssumeCapacity(.{
+                    .kind = .convex,
+                    .base_element = op.indices.start,
+                    .element_count = op.indices.count,
+                    .uniform_index = op.uniform_index,
+                });
+            },
+            .triangles => {},
+        }
+    }
 }
 
 fn appendStencilDraws(
@@ -74,6 +121,18 @@ fn appendCoverDraws(
             .uniform_index = op.uniform_index,
         });
     }
+}
+
+fn countPathDraws(draw_ops: []const draw_plan.DrawOp) usize {
+    var count: usize = 0;
+    for (draw_ops) |op| {
+        switch (op.kind) {
+            .stencil_fill, .convex_fill => count += @intFromBool(op.indices.count > 0),
+            .cover_fill => count += @intFromBool(op.vertices.count > 0),
+            .triangles => {},
+        }
+    }
+    return count;
 }
 
 fn countStencilDraws(draw_ops: []const draw_plan.DrawOp) usize {

@@ -31,6 +31,7 @@ pub const Range = draw_plan.Range;
 pub const StencilMode = draw_plan.StencilMode;
 pub const QueuedPath = draw_plan.QueuedPath;
 pub const Call = draw_plan.Call;
+pub const PathDraw = @import("../../render/sokol_device.zig").PathDraw;
 pub const StencilDraw = @import("../../render/sokol_device.zig").StencilDraw;
 pub const CoverDraw = @import("../../render/sokol_device.zig").CoverDraw;
 pub const PathFsParams = @import("../../render/sokol_device.zig").PathFsParams;
@@ -43,6 +44,7 @@ pub const Backend = struct {
     indices: std.ArrayList(u16) = .empty,
     uniforms: std.ArrayList(PaintUniform) = .empty,
     draw_ops: std.ArrayList(DrawOp) = .empty,
+    path_draws: std.ArrayList(PathDraw) = .empty,
     stencil_draws: std.ArrayList(StencilDraw) = .empty,
     cover_draws: std.ArrayList(CoverDraw) = .empty,
     frag_params: std.ArrayList(PathFsParams) = .empty,
@@ -68,6 +70,7 @@ pub const Backend = struct {
         self.indices.deinit(gpa);
         self.uniforms.deinit(gpa);
         self.draw_ops.deinit(gpa);
+        self.path_draws.deinit(gpa);
         self.stencil_draws.deinit(gpa);
         self.cover_draws.deinit(gpa);
         self.frag_params.deinit(gpa);
@@ -100,6 +103,7 @@ pub const Backend = struct {
         self.indices.clearRetainingCapacity();
         self.uniforms.clearRetainingCapacity();
         self.draw_ops.clearRetainingCapacity();
+        self.path_draws.clearRetainingCapacity();
         self.stencil_draws.clearRetainingCapacity();
         self.cover_draws.clearRetainingCapacity();
         self.frag_params.clearRetainingCapacity();
@@ -124,6 +128,7 @@ pub const Backend = struct {
             self.gpa,
             self.draw_ops.items,
             self.uniforms.items,
+            &self.path_draws,
             &self.stencil_draws,
             &self.cover_draws,
             &self.frag_params,
