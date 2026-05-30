@@ -15,6 +15,7 @@ pub const Pass = sg.Pass;
 pub const Bindings = sg.Bindings;
 pub const Color = sg.Color;
 pub const PassAction = sg.PassAction;
+pub const Swapchain = sg.Swapchain;
 pub const BufferDesc = sg.BufferDesc;
 pub const PipelineDesc = sg.PipelineDesc;
 
@@ -427,6 +428,10 @@ pub fn stencilCoverPassAction(clear_color: Color) PassAction {
 
 pub fn passWithAction(action: PassAction) Pass {
     return .{ .action = action, .label = "okys_pass" };
+}
+
+pub fn swapchainPassWithAction(action: PassAction, swapchain: Swapchain) Pass {
+    return .{ .action = action, .swapchain = swapchain, .label = "okys_swapchain_pass" };
 }
 
 pub fn smokeVertexBufferDesc(triangle: *const SmokeTriangle) BufferDesc {

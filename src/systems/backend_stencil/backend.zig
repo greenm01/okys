@@ -15,6 +15,7 @@ const PathRange = path.PathRange;
 const Point = path.Point;
 const Vertex = path.Vertex;
 const RenderInterface = @import("../../render/interface.zig").RenderInterface;
+const sokol_device = @import("../../render/sokol_device.zig");
 pub const draw_plan = @import("draw_plan.zig");
 pub const replay = @import("replay.zig");
 
@@ -34,10 +35,12 @@ pub const Range = draw_plan.Range;
 pub const StencilMode = draw_plan.StencilMode;
 pub const QueuedPath = draw_plan.QueuedPath;
 pub const Call = draw_plan.Call;
-pub const PathDraw = @import("../../render/sokol_device.zig").PathDraw;
-pub const StencilDraw = @import("../../render/sokol_device.zig").StencilDraw;
-pub const CoverDraw = @import("../../render/sokol_device.zig").CoverDraw;
-pub const PathFsParams = @import("../../render/sokol_device.zig").PathFsParams;
+pub const Device = sokol_device.Device;
+pub const Pass = sokol_device.Pass;
+pub const PathDraw = sokol_device.PathDraw;
+pub const StencilDraw = sokol_device.StencilDraw;
+pub const CoverDraw = sokol_device.CoverDraw;
+pub const PathFsParams = sokol_device.PathFsParams;
 
 pub const Backend = struct {
     gpa: std.mem.Allocator,
@@ -110,6 +113,24 @@ pub const Backend = struct {
     pub fn flush(self: *Backend) void {
         _ = self.buildStencilPass();
         self.flush_count += 1;
+        self.clearQueued();
+    }
+
+    pub fn submitToDevice(self: *Backend, device: *Device, pass: Pass) bool {
+        if (!self.buildStencilPass()) return false;
+        device.drawPathPass(
+            pass,
+            self.vertices.items,
+            self.indices.items,
+            self.path_draws.items,
+            self.frag_params.items,
+            self.viewport_width,
+            self.viewport_height,
+        );
+        return true;
+    }
+
+    pub fn clearQueued(self: *Backend) void {
         self.calls.clearRetainingCapacity();
         self.paths.clearRetainingCapacity();
         self.vertices.clearRetainingCapacity();

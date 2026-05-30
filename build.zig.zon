@@ -13,6 +13,7 @@
         "build.zig",
         "build.zig.zon",
         "include",
+        "demos",
         "src",
         "tests",
         "LICENSE",

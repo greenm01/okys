@@ -49,6 +49,25 @@ pub fn build(b: *std.Build) !void {
     okys_mod.addImport("okys_shader", mod_okys_shader);
     okys_mod.addImport("okys_path_shader", mod_okys_path_shader);
 
+    const native_demo_mod = b.createModule(.{
+        .root_source_file = b.path("demos/native_stencil.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    native_demo_mod.addImport("okys", okys_mod);
+    native_demo_mod.addImport("sokol", mod_sokol);
+
+    const native_demo = b.addExecutable(.{
+        .name = "okys_native_stencil_demo",
+        .root_module = native_demo_mod,
+    });
+    const demo_native_step = b.step("demo-native", "Build the native stencil-cover demo");
+    demo_native_step.dependOn(&b.addInstallArtifact(native_demo, .{}).step);
+    const run_native_demo = b.addRunArtifact(native_demo);
+    const run_demo_native_step = b.step("run-demo-native", "Run the native stencil-cover demo");
+    run_demo_native_step.dependOn(&run_native_demo.step);
+
     // The C ABI static library. Root is c_api.zig so its export fns are roots.
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/c_api.zig"),

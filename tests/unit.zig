@@ -4,6 +4,7 @@ const testing = std.testing;
 const okys = @import("okys");
 const backend_selection_tests = @import("backend_selection.zig");
 const backend_stencil_draw_plan_tests = @import("backend_stencil_draw_plan.zig");
+const backend_stencil_golden_tests = @import("backend_stencil_golden.zig");
 const backend_stencil_replay_tests = @import("backend_stencil_replay.zig");
 const backend_stencil_tests = @import("backend_stencil.zig");
 const image_ops_tests = @import("image_ops.zig");
@@ -54,6 +55,7 @@ test "all production modules analyze" {
     _ = okys.c_api;
     _ = backend_selection_tests;
     _ = backend_stencil_draw_plan_tests;
+    _ = backend_stencil_golden_tests;
     _ = backend_stencil_replay_tests;
     _ = backend_stencil_tests;
     _ = image_ops_tests;
