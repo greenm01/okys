@@ -3,6 +3,7 @@ const testing = std.testing;
 
 const okys = @import("okys");
 const mock_backend = @import("mock_backend.zig");
+const sokol_device_tests = @import("sokol_device.zig");
 const color = okys.types.color;
 const Context = okys.state.context.Context;
 const paint_ops = okys.ops.paint;
@@ -40,6 +41,8 @@ test "all production modules analyze" {
     _ = okys.render.interface;
     _ = okys.render.sokol_device;
     _ = okys.c_api;
+    _ = mock_backend;
+    _ = sokol_device_tests;
 }
 
 test "rgba maps 0..255 to 0..1" {
