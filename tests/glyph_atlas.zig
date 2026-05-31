@@ -256,8 +256,64 @@ test "ordinary image pattern remains white-tinted by default" {
     try testing.expectEqual(@as(u8, 255), px[3]);
 }
 
+test "loaded font text emits cached glyph triangles" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const font_id = loadTestFont(ctx) orelse return error.SkipZigTest;
+
+    var mock: MockBackend = .{};
+    ctx.installBackend(mock.interface());
+    text_ops.fontFaceId(ctx, font_id);
+    text_ops.fontSize(ctx, 24);
+
+    const advanced = text_ops.text(ctx, 10, 32, "AA");
+    try testing.expect(advanced > 10);
+    try testing.expectEqual(@as(usize, 1), mock.create_texture_calls);
+    try testing.expectEqual(@as(usize, 1), mock.update_texture_calls);
+    try testing.expectEqual(@as(usize, 2), mock.triangles_calls);
+    try testing.expect(mock.last_triangles.first_vertex.y < 32);
+}
+
+test "loaded font text renders through sparse backend proof surface" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const font_id = loadTestFont(ctx) orelse return error.SkipZigTest;
+    const backend = try SparseBackend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+
+    frame_ops.beginFrame(ctx, 96, 64, 1);
+    text_ops.fontFaceId(ctx, font_id);
+    text_ops.fontSize(ctx, 28);
+    _ = text_ops.text(ctx, 8, 36, "Ok");
+
+    try testing.expect(backend.build());
+    try testing.expect(surfaceHasAlpha(backend));
+}
+
 fn rgbaAt(backend: *const SparseBackend, x: usize, y: usize) [4]u8 {
     const width: usize = @intFromFloat(@ceil(backend.viewport_width));
     const index = (y * width + x) * 4;
     return backend.surface.items[index..][0..4].*;
+}
+
+fn surfaceHasAlpha(backend: *const SparseBackend) bool {
+    var i: usize = 3;
+    while (i < backend.surface.items.len) : (i += 4) {
+        if (backend.surface.items[i] != 0) return true;
+    }
+    return false;
+}
+
+fn loadTestFont(ctx: *Context) ?c_int {
+    const candidates = [_][]const u8{
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    };
+    for (candidates) |path| {
+        const id = text_ops.createFont(ctx, "sans", path);
+        if (id > 0) return id;
+    }
+    return null;
 }

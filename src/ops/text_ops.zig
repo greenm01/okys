@@ -22,6 +22,7 @@ pub const fallback_advance: f32 = fallback_font_size * 0.5;
 pub const fallback_ascender: f32 = fallback_font_size * 0.8;
 pub const fallback_descender: f32 = -fallback_font_size * 0.2;
 pub const fallback_line_height: f32 = fallback_font_size * 1.4;
+const default_atlas_size: u32 = 2048;
 
 pub fn createFont(ctx: *Context, name: []const u8, filename: []const u8) c_int {
     if (name.len == 0 or filename.len == 0) return 0;
@@ -68,6 +69,7 @@ pub fn initGlyphAtlas(ctx: *Context, width: u32, height: u32) bool {
         image_ops.deleteImage(ctx, ctx.glyph_atlas.image_id);
         ctx.glyph_atlas.deinit(ctx.gpa);
     }
+    ctx.fonts.clearGlyphCache();
 
     const image_id = image_ops.createImageRGBA(ctx, width, height, null);
     if (image_id == .none) return false;
@@ -137,8 +139,25 @@ pub fn textWidth(bytes: []const u8) f32 {
 }
 
 pub fn text(ctx: *Context, x: f32, y: f32, bytes: []const u8) f32 {
-    _ = y;
-    return x + textWidthFor(ctx, bytes);
+    const state = ctx.state();
+    if (state.font_id <= 0) return x + textWidthFor(ctx, bytes);
+
+    var i: usize = 0;
+    var pen_x = alignedX(ctx, x, bytes);
+    const baseline_y = alignedBaselineY(ctx, y);
+    const tint = state.fill.inner_color;
+    while (i < bytes.len) {
+        const b = bytes[i];
+        if (b == 0 or isLineBreak(b)) break;
+        const char_len = codepointByteLen(bytes[i..]);
+        const codepoint = decodeCodepoint(bytes[i .. i + char_len]);
+        const glyph = cachedGlyphForCodepoint(ctx, codepoint);
+        if (glyph.glyph != .none) drawGlyphTinted(ctx, glyph.glyph, pen_x, baseline_y, tint);
+        pen_x += glyph.advance_x;
+        i += char_len;
+        if (i < bytes.len and bytes[i] != 0 and !isLineBreak(bytes[i])) pen_x += letterSpacing(ctx);
+    }
+    return pen_x;
 }
 
 pub fn textBox(ctx: *Context, x: f32, y: f32, break_row_width: f32, bytes: []const u8) void {
@@ -338,6 +357,52 @@ fn alignedX(ctx: ?*const Context, x: f32, bytes: []const u8) f32 {
     return x;
 }
 
+fn alignedBaselineY(ctx: *const Context, y: f32) f32 {
+    const alignment = ctx.states.items[ctx.states.items.len - 1].text_align;
+    const metrics = textMetrics(ctx);
+    if (alignment & draw_state.text_align.top != 0) return y + metrics.ascender;
+    if (alignment & draw_state.text_align.middle != 0) return y + (metrics.ascender + metrics.descender) * 0.5;
+    if (alignment & draw_state.text_align.bottom != 0) return y + metrics.descender;
+    return y;
+}
+
+const CachedTextGlyph = struct {
+    glyph: GlyphId = .none,
+    advance_x: f32 = 0,
+};
+
+fn cachedGlyphForCodepoint(ctx: *Context, codepoint: u21) CachedTextGlyph {
+    const state = ctx.state();
+    const font_id = state.font_id;
+    const size = state.font_size;
+    const dpr = if (ctx.device_pixel_ratio > 0) ctx.device_pixel_ratio else 1;
+    if (ctx.fonts.cachedGlyph(font_id, codepoint, size, dpr)) |cached| {
+        return .{ .glyph = cached.glyph, .advance_x = cached.advance_x };
+    }
+
+    const resolved = ctx.fonts.resolveGlyph(ctx.gpa, font_id, size, codepoint) orelse {
+        return .{ .advance_x = glyphAdvance(ctx, codepoint) };
+    };
+    const glyph_id = rasterizeAndCacheGlyph(ctx, codepoint, resolved, size, dpr);
+    return .{ .glyph = glyph_id, .advance_x = resolved.advance_x };
+}
+
+fn rasterizeAndCacheGlyph(ctx: *Context, codepoint: u21, resolved: @import("../state/fonts.zig").ResolvedGlyph, size: f32, dpr: f32) GlyphId {
+    if (ctx.glyph_atlas.image_id == .none and !initGlyphAtlas(ctx, default_atlas_size, default_atlas_size)) return .none;
+
+    var raster = ctx.fonts.rasterizeGlyph(ctx.gpa, resolved, size, dpr) catch return .none;
+    defer raster.deinit(ctx.gpa);
+    if (raster.width == 0 or raster.height == 0 or raster.alpha.len == 0) {
+        ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, .none, raster.metrics.advance_x) catch {};
+        return .none;
+    }
+
+    const glyph_id = ctx.glyph_atlas.addGlyphAlpha(ctx.gpa, raster.alpha, raster.width, raster.height, raster.metrics) catch return .none;
+    image_ops.updateImage(ctx, ctx.glyph_atlas.image_id, ctx.glyph_atlas.pixels.items);
+    ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, glyph_id, raster.metrics.advance_x) catch {};
+    return glyph_id;
+}
+
 fn glyphPaint(ctx: *Context, glyph: GlyphRecord, x: f32, y: f32, tint: color.Color) color.Paint {
     const atlas = &ctx.glyph_atlas;
     const x0 = @as(f32, @floatFromInt(glyph.atlas_x));
@@ -363,13 +428,15 @@ fn glyphVertices(ctx: *Context, glyph: GlyphRecord, paint: color.Paint) [6]Verte
     const atlas = &ctx.glyph_atlas;
     const x0 = @as(f32, @floatFromInt(glyph.atlas_x));
     const y0 = @as(f32, @floatFromInt(glyph.atlas_y));
+    const draw_w = if (glyph.draw_width > 0) glyph.draw_width else @as(f32, @floatFromInt(glyph.width));
+    const draw_h = if (glyph.draw_height > 0) glyph.draw_height else @as(f32, @floatFromInt(glyph.height));
     const x1 = x0 + @as(f32, @floatFromInt(glyph.width));
     const y1 = y0 + @as(f32, @floatFromInt(glyph.height));
 
     const p00 = xforms.point(&paint.xform, x0, y0);
-    const p10 = xforms.point(&paint.xform, x1, y0);
-    const p11 = xforms.point(&paint.xform, x1, y1);
-    const p01 = xforms.point(&paint.xform, x0, y1);
+    const p10 = xforms.point(&paint.xform, x0 + draw_w, y0);
+    const p11 = xforms.point(&paint.xform, x0 + draw_w, y0 + draw_h);
+    const p01 = xforms.point(&paint.xform, x0, y0 + draw_h);
     const inv_w = 1.0 / @as(f32, @floatFromInt(atlas.width));
     const inv_h = 1.0 / @as(f32, @floatFromInt(atlas.height));
     const tex_u0 = x0 * inv_w;
