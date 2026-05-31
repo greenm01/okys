@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const okys = @import("okys");
+const color = okys.types.color;
 const GlyphAtlas = okys.state.glyph_atlas.GlyphAtlas;
 const GlyphId = okys.types.text.GlyphId;
 const GlyphMetrics = okys.types.text.GlyphMetrics;
@@ -94,6 +95,26 @@ test "text ops create atlas upload glyph and draw textured quad" {
     try testing.expectApproxEqAbs(@as(f32, 22), mock.last_triangles.first_vertex.y, 0.001);
 }
 
+test "tinted glyph stores tint in image paint" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    var mock: MockBackend = .{};
+    ctx.installBackend(mock.interface());
+
+    try testing.expect(text_ops.initGlyphAtlas(ctx, 16, 16));
+    const glyph = text_ops.addGlyphAlpha(ctx, &.{255}, 1, 1, .{});
+    const tint = color.rgbaf(0.25, 0.5, 0.75, 0.8);
+    text_ops.drawGlyphTinted(ctx, glyph, 10, 20, tint);
+
+    try testing.expectEqual(@as(usize, 1), mock.triangles_calls);
+    try testing.expectApproxEqAbs(tint.r, mock.last_triangles.paint.inner_color.r, 0.001);
+    try testing.expectApproxEqAbs(tint.g, mock.last_triangles.paint.inner_color.g, 0.001);
+    try testing.expectApproxEqAbs(tint.b, mock.last_triangles.paint.inner_color.b, 0.001);
+    try testing.expectApproxEqAbs(tint.a, mock.last_triangles.paint.inner_color.a, 0.001);
+    try testing.expectEqual(mock.last_triangles.paint.inner_color, mock.last_triangles.paint.outer_color);
+}
+
 test "draw glyph honors current transform" {
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
@@ -109,6 +130,48 @@ test "draw glyph honors current transform" {
     try testing.expectEqual(@as(usize, 1), mock.triangles_calls);
     try testing.expectApproxEqAbs(@as(f32, 15), mock.last_triangles.first_vertex.x, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 27), mock.last_triangles.first_vertex.y, 0.001);
+}
+
+test "glyph run metrics skip missing glyphs and sum advances" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    var mock: MockBackend = .{};
+    ctx.installBackend(mock.interface());
+
+    try testing.expect(text_ops.initGlyphAtlas(ctx, 16, 16));
+    const glyph_a = text_ops.addGlyphAlpha(ctx, &.{255}, 1, 1, .{ .advance_x = 3 });
+    const glyph_b = text_ops.addGlyphAlpha(ctx, &.{255}, 1, 1, .{ .advance_x = 5, .advance_y = 1 });
+    const missing: GlyphId = @enumFromInt(9999);
+    const run = [_]GlyphId{ glyph_a, missing, glyph_b };
+
+    const measured = text_ops.measureGlyphRun(ctx, &run);
+    try testing.expectApproxEqAbs(@as(f32, 8), measured.advance_x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1), measured.advance_y, 0.001);
+    try testing.expectEqual(@as(usize, 2), measured.emitted_count);
+    try testing.expectEqual(@as(usize, 1), measured.missing_count);
+}
+
+test "glyph run draws emitted glyphs in metric order" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    var mock: MockBackend = .{};
+    ctx.installBackend(mock.interface());
+
+    try testing.expect(text_ops.initGlyphAtlas(ctx, 16, 16));
+    const glyph_a = text_ops.addGlyphAlpha(ctx, &.{255}, 1, 1, .{ .advance_x = 3 });
+    const glyph_b = text_ops.addGlyphAlpha(ctx, &.{255}, 1, 1, .{ .advance_x = 5 });
+    const missing: GlyphId = @enumFromInt(9999);
+    const run = [_]GlyphId{ glyph_a, missing, glyph_b };
+
+    const drawn = text_ops.drawGlyphRun(ctx, &run, 10, 20, color.rgbaf(1, 0, 0, 1));
+    try testing.expectEqual(@as(usize, 2), mock.triangles_calls);
+    try testing.expectEqual(@as(usize, 2), drawn.emitted_count);
+    try testing.expectEqual(@as(usize, 1), drawn.missing_count);
+    try testing.expectApproxEqAbs(@as(f32, 8), drawn.advance_x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 13), mock.last_triangles.first_vertex.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 20), mock.last_triangles.first_vertex.y, 0.001);
 }
 
 test "glyph triangles queue through stencil backend with atlas paint" {
@@ -143,6 +206,54 @@ test "glyph triangles render through sparse backend proof surface" {
     try testing.expect(backend.surface.items.len > 0);
     try testing.expect(rgbaAt(backend, 4, 5)[3] > 0);
     try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 0, 0));
+}
+
+test "sparse proof surface resolves tinted glyph color" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try SparseBackend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+
+    frame_ops.beginFrame(ctx, 32, 32, 1);
+    try testing.expect(text_ops.initGlyphAtlas(ctx, 16, 16));
+    const glyph = text_ops.addGlyphAlpha(ctx, &.{255}, 1, 1, .{});
+    text_ops.drawGlyphTinted(ctx, glyph, 4, 5, color.rgbaf(1, 0, 0, 0.5));
+
+    try testing.expect(backend.build());
+    const px = rgbaAt(backend, 4, 5);
+    try testing.expect(px[0] > 120);
+    try testing.expect(px[1] <= 1);
+    try testing.expect(px[2] <= 1);
+    try testing.expect(px[3] > 120 and px[3] < 130);
+}
+
+test "ordinary image pattern remains white-tinted by default" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try SparseBackend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+
+    const pixels = [_]u8{ 10, 20, 30, 255 };
+    const image_id = okys.ops.image.createImageRGBA(ctx, 1, 1, &pixels);
+    try testing.expect(image_id != .none);
+
+    frame_ops.beginFrame(ctx, 8, 8, 1);
+    const verts = [_]okys.types.path.Vertex{
+        .{ .x = 0, .y = 0, .u = 0, .v = 0 },
+        .{ .x = 2, .y = 0, .u = 1, .v = 0 },
+        .{ .x = 0, .y = 2, .u = 0, .v = 1 },
+    };
+    const paint = okys.ops.paint.imagePattern(ctx, 0, 0, 1, 1, 0, @intCast(@intFromEnum(image_id)), 1);
+    const scissor: color.Scissor = .{ .xform = .{ 0, 0, 0, 0, 0, 0 }, .extent = .{ -1, -1 } };
+    const iface = backend.interface();
+    iface.triangles(iface.ctx, &paint, &scissor, &verts);
+
+    try testing.expect(backend.build());
+    const px = rgbaAt(backend, 0, 0);
+    try testing.expectEqual(@as(u8, 10), px[0]);
+    try testing.expectEqual(@as(u8, 20), px[1]);
+    try testing.expectEqual(@as(u8, 30), px[2]);
+    try testing.expectEqual(@as(u8, 255), px[3]);
 }
 
 fn rgbaAt(backend: *const SparseBackend, x: usize, y: usize) [4]u8 {

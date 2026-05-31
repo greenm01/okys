@@ -86,7 +86,7 @@ void main() {
         vec2 image_extent = max(abs(extent_radius_feather.xy), vec2(0.0001));
         vec4 sample_color = texture(sampler2D(image_tex, image_smp), pt / image_extent);
         float alpha = sample_color.a * inner_color.a;
-        frag_color = vec4(sample_color.rgb * alpha, alpha) * scissor * edge;
+        frag_color = vec4(sample_color.rgb * inner_color.rgb * sample_color.a, alpha) * scissor * edge;
         return;
     }
 

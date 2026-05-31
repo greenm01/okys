@@ -907,9 +907,9 @@ fn sampleImagePattern(paint: *const color.Paint, texture: *const Texture, px: f3
     const sample = sampleWrappedLinear(texture, pt[0], pt[1], paint.extent);
     const alpha = sample.a * paint.inner_color.a;
     return .{
-        .r = sample.r * alpha,
-        .g = sample.g * alpha,
-        .b = sample.b * alpha,
+        .r = sample.r * paint.inner_color.r * alpha,
+        .g = sample.g * paint.inner_color.g * alpha,
+        .b = sample.b * paint.inner_color.b * alpha,
         .a = alpha,
     };
 }

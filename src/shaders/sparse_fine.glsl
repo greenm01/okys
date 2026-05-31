@@ -282,7 +282,7 @@ void main() {
         vec2 image_extent = max(abs(call.extent_radius_feather.xy), vec2(0.0001));
         vec4 sample_color = texture(sampler2D(image_tex, image_smp), pt / image_extent);
         float sample_alpha = sample_color.a * call.inner_color.a;
-        paint = vec4(sample_color.rgb * sample_alpha, sample_alpha);
+        paint = vec4(sample_color.rgb * call.inner_color.rgb * sample_color.a, sample_alpha);
     } else {
         float feather = max(call.extent_radius_feather.w, 0.0001);
         float d = clamp((sdroundrect(pt, call.extent_radius_feather.xy, call.extent_radius_feather.z) + feather * 0.5) / feather, 0.0, 1.0);

@@ -15,6 +15,13 @@ pub const GlyphMetrics = struct {
     advance_y: f32 = 0,
 };
 
+pub const GlyphRunMetrics = struct {
+    advance_x: f32 = 0,
+    advance_y: f32 = 0,
+    emitted_count: usize = 0,
+    missing_count: usize = 0,
+};
+
 pub const GlyphRecord = struct {
     id: GlyphId = .none,
     atlas_x: u32 = 0,

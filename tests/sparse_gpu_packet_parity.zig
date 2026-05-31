@@ -324,9 +324,9 @@ fn resolvePaint(call: sparse.gpu_fine.GpuCall, textures: []const sparse.fine.Tex
         const sample = sampleWrappedLinear(texture, pt[0], pt[1], extent);
         const alpha = sample.a * call.inner_color[3];
         return .{
-            .r = sample.r * alpha,
-            .g = sample.g * alpha,
-            .b = sample.b * alpha,
+            .r = sample.r * call.inner_color[0] * sample.a,
+            .g = sample.g * call.inner_color[1] * sample.a,
+            .b = sample.b * call.inner_color[2] * sample.a,
             .a = alpha,
         };
     }
