@@ -17,11 +17,31 @@ pub const oky_antialias: u32 = 1 << 0;
 pub const oky_stencil_strokes: u32 = 1 << 1;
 pub const scene_width: f32 = 960;
 pub const scene_height: f32 = 640;
+pub const tiger_min_x: f32 = 17.0;
+pub const tiger_min_y: f32 = 53.0;
+pub const tiger_max_x: f32 = 562.0;
+pub const tiger_max_y: f32 = 613.0;
+pub const tiger_margin: f32 = 32.0;
+pub const tiger_visible_width = tiger_max_x - tiger_min_x;
+pub const tiger_visible_height = tiger_max_y - tiger_min_y;
+pub const tiger_source_center_x = (tiger_min_x + tiger_max_x) * 0.5;
+pub const tiger_source_center_y = tiger_data.height - (tiger_min_y + tiger_max_y) * 0.5;
+pub const tiger_nose_source_x: f32 = 145.0;
+pub const tiger_nose_source_y: f32 = 315.0;
 
 const checker_size = 16;
 const checker_square = 4;
 
 pub const SceneDraw = *const fn (*Context, ImageId) void;
+
+pub const TigerPlacement = struct {
+    center_x: f32,
+    center_y: f32,
+    scale: f32,
+    angle: f32 = 0,
+    pivot_x: f32 = tiger_source_center_x,
+    pivot_y: f32 = tiger_source_center_y,
+};
 
 pub const SceneSpec = struct {
     name: []const u8,
@@ -267,6 +287,44 @@ pub fn drawTigerScene(c: *Context, _: ImageId) void {
     path_ops.rect(c, 0, 0, scene_width, scene_height);
     render_ops.fill(c);
 
+    drawTiger(c, tigerDefaultPlacement());
+}
+
+pub fn tigerDefaultPlacement() TigerPlacement {
+    return .{
+        .center_x = tiger_tx + tiger_source_center_x * tiger_scale,
+        .center_y = tiger_ty + tiger_source_center_y * tiger_scale,
+        .scale = tiger_scale,
+    };
+}
+
+pub fn tigerScaleForBox(width: f32, height: f32, margin: f32, rotating: bool) f32 {
+    const available_w = @max(width - margin * 2.0, 1.0);
+    const available_h = @max(height - margin * 2.0, 1.0);
+    if (rotating) {
+        const diagonal = @sqrt(tiger_visible_width * tiger_visible_width + tiger_visible_height * tiger_visible_height);
+        return @min(available_w / diagonal, available_h / diagonal);
+    }
+    return @min(available_w / tiger_visible_width, available_h / tiger_visible_height);
+}
+
+pub fn tigerScaleForPivotBox(width: f32, height: f32, margin: f32, pivot_x: f32, pivot_y: f32) f32 {
+    const available_w = @max(width - margin * 2.0, 1.0);
+    const available_h = @max(height - margin * 2.0, 1.0);
+    const radius = @max(
+        distance(pivot_x, pivot_y, tiger_min_x, tiger_data.height - tiger_min_y),
+        @max(
+            distance(pivot_x, pivot_y, tiger_min_x, tiger_data.height - tiger_max_y),
+            @max(
+                distance(pivot_x, pivot_y, tiger_max_x, tiger_data.height - tiger_min_y),
+                distance(pivot_x, pivot_y, tiger_max_x, tiger_data.height - tiger_max_y),
+            ),
+        ),
+    );
+    return @min(available_w, available_h) / @max(radius * 2.0, 1.0);
+}
+
+pub fn drawTiger(c: *Context, placement: TigerPlacement) void {
     var command_index: usize = 0;
     var point_index: usize = 0;
     while (command_index < tiger_data.commands.len) {
@@ -307,22 +365,27 @@ pub fn drawTigerScene(c: *Context, _: ImageId) void {
             command_index += 1;
             switch (path_command) {
                 'M' => {
-                    path_ops.moveTo(c, tigerX(tiger_data.points[point_index]), tigerY(tiger_data.points[point_index + 1]));
+                    const p = tigerPoint(placement, tiger_data.points[point_index], tiger_data.points[point_index + 1]);
+                    path_ops.moveTo(c, p[0], p[1]);
                     point_index += 2;
                 },
                 'L' => {
-                    path_ops.lineTo(c, tigerX(tiger_data.points[point_index]), tigerY(tiger_data.points[point_index + 1]));
+                    const p = tigerPoint(placement, tiger_data.points[point_index], tiger_data.points[point_index + 1]);
+                    path_ops.lineTo(c, p[0], p[1]);
                     point_index += 2;
                 },
                 'C' => {
+                    const p0 = tigerPoint(placement, tiger_data.points[point_index + 0], tiger_data.points[point_index + 1]);
+                    const p1 = tigerPoint(placement, tiger_data.points[point_index + 2], tiger_data.points[point_index + 3]);
+                    const p2 = tigerPoint(placement, tiger_data.points[point_index + 4], tiger_data.points[point_index + 5]);
                     path_ops.bezierTo(
                         c,
-                        tigerX(tiger_data.points[point_index + 0]),
-                        tigerY(tiger_data.points[point_index + 1]),
-                        tigerX(tiger_data.points[point_index + 2]),
-                        tigerY(tiger_data.points[point_index + 3]),
-                        tigerX(tiger_data.points[point_index + 4]),
-                        tigerY(tiger_data.points[point_index + 5]),
+                        p0[0],
+                        p0[1],
+                        p1[0],
+                        p1[1],
+                        p2[0],
+                        p2[1],
                     );
                     point_index += 6;
                 },
@@ -338,7 +401,7 @@ pub fn drawTigerScene(c: *Context, _: ImageId) void {
 
         if (stroke_mode == 'S') {
             paint_ops.strokeColor(c, stroke_color);
-            state_ops.strokeWidth(c, stroke_width * tiger_scale);
+            state_ops.strokeWidth(c, stroke_width * placement.scale);
             state_ops.miterLimit(c, miter_limit);
             state_ops.lineCap(c, tigerLineCap(cap_mode));
             state_ops.lineJoin(c, tigerLineJoin(join_mode));
@@ -351,13 +414,6 @@ fn f32FromInt(value: usize) f32 {
     return @floatFromInt(value);
 }
 
-const tiger_min_x: f32 = 17.0;
-const tiger_min_y: f32 = 53.0;
-const tiger_max_x: f32 = 562.0;
-const tiger_max_y: f32 = 613.0;
-const tiger_margin: f32 = 32.0;
-const tiger_visible_width = tiger_max_x - tiger_min_x;
-const tiger_visible_height = tiger_max_y - tiger_min_y;
 const tiger_scale = @min(
     (scene_width - tiger_margin * 2.0) / tiger_visible_width,
     (scene_height - tiger_margin * 2.0) / tiger_visible_height,
@@ -365,12 +421,23 @@ const tiger_scale = @min(
 const tiger_tx = (scene_width - tiger_visible_width * tiger_scale) * 0.5 - tiger_min_x * tiger_scale;
 const tiger_ty = (scene_height - tiger_visible_height * tiger_scale) * 0.5 - tiger_min_y * tiger_scale;
 
-fn tigerX(x: f32) f32 {
-    return tiger_tx + x * tiger_scale;
+fn tigerPoint(placement: TigerPlacement, x: f32, y: f32) [2]f32 {
+    const source_x = x;
+    const source_y = tiger_data.height - y;
+    const dx = source_x - placement.pivot_x;
+    const dy = source_y - placement.pivot_y;
+    const cs = @cos(placement.angle);
+    const sn = @sin(placement.angle);
+    return .{
+        placement.center_x + (dx * cs - dy * sn) * placement.scale,
+        placement.center_y + (dx * sn + dy * cs) * placement.scale,
+    };
 }
 
-fn tigerY(y: f32) f32 {
-    return tiger_ty + (tiger_data.height - y) * tiger_scale;
+fn distance(x0: f32, y0: f32, x1: f32, y1: f32) f32 {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    return @sqrt(dx * dx + dy * dy);
 }
 
 fn tigerLineCap(mode: u8) okys.state.draw_state.LineCap {

@@ -66,6 +66,7 @@ pub const PathFsParams = path_shader.FsParams;
 pub const max_path_textures = 64;
 
 const path_default_texture_pixels = [_]u8{ 255, 255, 255, 255 };
+const max_compute_dispatch_groups_per_axis: u32 = 65_535;
 
 pub const SparseFineFallback = enum {
     none,
@@ -378,6 +379,27 @@ pub const Device = struct {
         sg.endPass();
     }
 
+    pub fn drawTextureViewQuad(
+        self: *Device,
+        pass: Pass,
+        view: View,
+        vertices: [4]BlitVertex,
+        view_width: f32,
+        view_height: f32,
+    ) void {
+        if (view.id == 0) return;
+        self.ensureBlitResources(1, 1);
+        sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+
+        self.beginPass(pass);
+        const params = blitVsParams(view_width, view_height);
+        sg.applyPipeline(self.blit_pipeline);
+        sg.applyBindings(blitBindings(self.blit_vertices, view, self.blit_sampler));
+        sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
+        sg.draw(0, 4, 1);
+        sg.endPass();
+    }
+
     pub fn drawSparseFineSurface(
         self: *Device,
         pass: Pass,
@@ -483,6 +505,7 @@ pub const Device = struct {
         sg.dispatch(dispatchGroups(surface_width, 8), dispatchGroups(surface_height, 8), 1);
 
         sg.applyPipeline(self.sparse_fine_pipeline);
+        var encoded_dispatches: usize = 0;
         for (packet.calls.items) |call| {
             if (call.task_count == 0) continue;
             const texture = self.sparseTextureForCall(call);
@@ -496,15 +519,23 @@ pub const Device = struct {
                 texture.view,
                 self.path_texture_sampler,
             ));
-            const fine_params: SparseFineParams = .{
-                .surface_width = @intCast(surface_width),
-                .surface_height = @intCast(surface_height),
-                .task_start = @intCast(call.task_start),
-                .task_count = @intCast(call.task_count),
-            };
-            sg.applyUniforms(sparse_fine_params_slot, rangeFromValue(SparseFineParams, &fine_params));
-            sg.dispatch(@intCast(call.task_count), 1, 1);
+            var task_offset: u32 = 0;
+            while (task_offset < call.task_count) {
+                const remaining = call.task_count - task_offset;
+                const chunk = @min(remaining, max_compute_dispatch_groups_per_axis);
+                const fine_params: SparseFineParams = .{
+                    .surface_width = @intCast(surface_width),
+                    .surface_height = @intCast(surface_height),
+                    .task_start = @intCast(call.task_start + task_offset),
+                    .task_count = @intCast(chunk),
+                };
+                sg.applyUniforms(sparse_fine_params_slot, rangeFromValue(SparseFineParams, &fine_params));
+                sg.dispatch(@intCast(chunk), 1, 1);
+                encoded_dispatches += 1;
+                task_offset += chunk;
+            }
         }
+        timing.dispatches = encoded_dispatches;
         sg.endPass();
         timing.compute_encode_ns = elapsedSince(compute_start);
 
@@ -1105,8 +1136,8 @@ pub fn blitImageDesc(width: u32, height: u32) sg.ImageDesc {
 
 pub fn blitSamplerDesc() sg.SamplerDesc {
     return .{
-        .min_filter = .NEAREST,
-        .mag_filter = .NEAREST,
+        .min_filter = .LINEAR,
+        .mag_filter = .LINEAR,
         .mipmap_filter = .NEAREST,
         .wrap_u = .CLAMP_TO_EDGE,
         .wrap_v = .CLAMP_TO_EDGE,
@@ -1286,6 +1317,7 @@ pub fn blitPipelineDesc(shader: Shader) PipelineDesc {
     desc.layout.attrs[blit_uv_attr].offset = @offsetOf(BlitVertex, "u");
     desc.layout.attrs[blit_uv_attr].format = .FLOAT2;
     desc.primitive_type = .TRIANGLE_STRIP;
+    desc.colors[0].blend = alphaBlend();
     desc.label = "okys_blit_pipeline";
     return desc;
 }

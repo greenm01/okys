@@ -110,6 +110,13 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    const bench_scenes_mod = b.createModule(.{
+        .root_source_file = b.path("tools/bench_scenes.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    bench_scenes_mod.addImport("okys", okys_mod);
 
     const native_demo_mod = b.createModule(.{
         .root_source_file = b.path("demos/native_stencil.zig"),
@@ -129,6 +136,33 @@ pub fn build(b: *std.Build) !void {
     const run_native_demo = b.addRunArtifact(native_demo);
     const run_demo_native_step = b.step("run-demo-native", "Run the native renderer comparison demo");
     run_demo_native_step.dependOn(&run_native_demo.step);
+
+    const tiger_spin_demo_mod = b.createModule(.{
+        .root_source_file = b.path("demos/tiger_spin.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    tiger_spin_demo_mod.addImport("okys", okys_mod);
+    tiger_spin_demo_mod.addImport("sokol", mod_sokol);
+    tiger_spin_demo_mod.addImport("bench_scenes", bench_scenes_mod);
+    const tiger_spin_options = b.addOptions();
+    tiger_spin_options.addOption(
+        bool,
+        "vsync",
+        b.option(bool, "tiger-spin-vsync", "Enable vsync in the spinning Tiger demo") orelse false,
+    );
+    tiger_spin_demo_mod.addOptions("demo_options", tiger_spin_options);
+
+    const tiger_spin_demo = b.addExecutable(.{
+        .name = "okys_tiger_spin_demo",
+        .root_module = tiger_spin_demo_mod,
+    });
+    const demo_tiger_spin_step = b.step("demo-tiger-spin", "Build the spinning Tiger sparse-strip demo");
+    demo_tiger_spin_step.dependOn(&b.addInstallArtifact(tiger_spin_demo, .{}).step);
+    const run_tiger_spin_demo = b.addRunArtifact(tiger_spin_demo);
+    const run_demo_tiger_spin_step = b.step("run-demo-tiger-spin", "Run the spinning Tiger sparse-strip demo");
+    run_demo_tiger_spin_step.dependOn(&run_tiger_spin_demo.step);
 
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("tools/bench.zig"),
