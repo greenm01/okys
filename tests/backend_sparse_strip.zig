@@ -555,13 +555,37 @@ test "sparse image update changes later proof output" {
     const id = image_ops.createImageRGBA(ctx, 1, 1, &pixels);
     try testing.expect(id != .none);
     pixels = .{ 0, 0, 255, 255 };
+    const initial_generation = backend.textures.get(id).?.generation;
     image_ops.updateImage(ctx, id, &pixels);
+    try testing.expect(backend.textures.get(id).?.generation > initial_generation);
 
     const paint = paint_ops.imagePattern(ctx, 0, 0, 1, 1, 0, @intCast(@intFromEnum(id)), 1);
     queuePaintRect(&iface, paint, 0, 0, 4, 4, disabled_scissor);
     try testing.expect(backend.build());
 
     try testing.expectEqual([4]u8{ 0, 0, 255, 255 }, rgbaAt(backend, 1, 1));
+}
+
+test "sparse subrect image update changes only selected pixels" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+
+    const pixels = [_]u8{
+        255, 0, 0,   255, 0,   255, 0,   255,
+        0,   0, 255, 255, 255, 255, 255, 255,
+    };
+    const id = image_ops.createImageRGBA(ctx, 2, 2, &pixels);
+    try testing.expect(id != .none);
+
+    const replacement = [_]u8{ 16, 32, 48, 255 };
+    image_ops.updateImageRect(ctx, id, 1, 0, 1, 1, &replacement);
+
+    const texture = backend.textures.get(id).?;
+    try testing.expectEqualSlices(u8, pixels[0..4], texture.pixels.items[0..4]);
+    try testing.expectEqualSlices(u8, &replacement, texture.pixels.items[4..8]);
+    try testing.expectEqualSlices(u8, pixels[8..], texture.pixels.items[8..]);
 }
 
 test "sparse scissor masks proof surface" {

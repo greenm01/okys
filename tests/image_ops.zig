@@ -54,9 +54,25 @@ test "image update delete and size route through backend and table" {
     image_ops.updateImage(ctx, id, &replacement);
     try testing.expectEqual(@as(usize, 1), backend.update_texture_calls);
     try testing.expectEqual(id, backend.last_update_id);
+    try testing.expectEqual(@as(u32, 0), backend.last_update_x);
+    try testing.expectEqual(@as(u32, 0), backend.last_update_y);
     try testing.expectEqual(@as(u32, 2), backend.last_update_width);
     try testing.expectEqual(@as(u32, 2), backend.last_update_height);
     try testing.expectEqual(@as(usize, replacement.len), backend.last_update_data_len);
+
+    const subrect = [_]u8{ 9, 10, 11, 12 };
+    image_ops.updateImageRect(ctx, id, 1, 0, 1, 1, &subrect);
+    try testing.expectEqual(@as(usize, 2), backend.update_texture_calls);
+    try testing.expectEqual(id, backend.last_update_id);
+    try testing.expectEqual(@as(u32, 1), backend.last_update_x);
+    try testing.expectEqual(@as(u32, 0), backend.last_update_y);
+    try testing.expectEqual(@as(u32, 1), backend.last_update_width);
+    try testing.expectEqual(@as(u32, 1), backend.last_update_height);
+    try testing.expectEqual(@as(usize, subrect.len), backend.last_update_data_len);
+
+    image_ops.updateImageRect(ctx, id, 2, 0, 1, 1, &subrect);
+    image_ops.updateImageRect(ctx, id, 0, 0, 2, 2, &subrect);
+    try testing.expectEqual(@as(usize, 2), backend.update_texture_calls);
 
     try testing.expectEqual([2]u32{ 2, 2 }, image_ops.imageSize(ctx, id).?);
     try testing.expectEqual(@as(usize, 1), backend.texture_size_calls);

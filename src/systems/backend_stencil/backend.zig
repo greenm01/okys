@@ -46,6 +46,7 @@ pub const PathFsParams = sokol_device.PathFsParams;
 const StencilTexture = struct {
     texture: Texture,
     pixels: std.ArrayList(u8) = .empty,
+    generation: u64 = 1,
 
     fn deinit(self: *StencilTexture, gpa: std.mem.Allocator) void {
         self.pixels.deinit(gpa);
@@ -58,7 +59,12 @@ const StencilTexture = struct {
             .height = self.texture.height,
             .format = self.texture.format,
             .pixels = self.pixels.items,
+            .generation = self.generation,
         };
+    }
+
+    fn markChanged(self: *StencilTexture) void {
+        self.generation = if (self.generation == std.math.maxInt(u64)) 1 else self.generation + 1;
     }
 };
 
@@ -478,6 +484,7 @@ fn updateTexture(ctx: *anyopaque, id: ImageId, x: u32, y: u32, w: u32, h: u32, d
         const dst = (@as(usize, y + row) * @as(usize, texture.texture.width) + x) * bpp;
         @memcpy(texture.pixels.items[dst..][0..row_bytes], data[src..][0..row_bytes]);
     }
+    texture.markChanged();
 }
 
 fn deleteTexture(ctx: *anyopaque, id: ImageId) void {

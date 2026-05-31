@@ -64,6 +64,8 @@ pub const MockBackend = struct {
     last_texture_format: TexFormat = .rgba8,
     last_texture_data_len: usize = 0,
     last_update_id: ImageId = .none,
+    last_update_x: u32 = 0,
+    last_update_y: u32 = 0,
     last_update_width: u32 = 0,
     last_update_height: u32 = 0,
     last_update_data_len: usize = 0,
@@ -107,11 +109,11 @@ pub const MockBackend = struct {
     }
 
     fn updateTexture(ctx: *anyopaque, id: ImageId, x: u32, y: u32, w: u32, h: u32, data: []const u8) void {
-        _ = x;
-        _ = y;
         const self = from(ctx);
         self.update_texture_calls += 1;
         self.last_update_id = id;
+        self.last_update_x = x;
+        self.last_update_y = y;
         self.last_update_width = w;
         self.last_update_height = h;
         self.last_update_data_len = data.len;

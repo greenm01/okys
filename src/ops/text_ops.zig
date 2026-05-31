@@ -83,7 +83,7 @@ pub fn initGlyphAtlas(ctx: *Context, width: u32, height: u32) bool {
 
 pub fn addGlyphAlpha(ctx: *Context, alpha: []const u8, width: u32, height: u32, metrics: GlyphMetrics) GlyphId {
     const id = ctx.glyph_atlas.addGlyphAlpha(ctx.gpa, alpha, width, height, metrics) catch return .none;
-    image_ops.updateImage(ctx, ctx.glyph_atlas.image_id, ctx.glyph_atlas.pixels.items);
+    uploadGlyphAlpha(ctx, id, alpha, width, height);
     return id;
 }
 
@@ -398,9 +398,36 @@ fn rasterizeAndCacheGlyph(ctx: *Context, codepoint: u21, resolved: @import("../s
     }
 
     const glyph_id = ctx.glyph_atlas.addGlyphAlpha(ctx.gpa, raster.alpha, raster.width, raster.height, raster.metrics) catch return .none;
-    image_ops.updateImage(ctx, ctx.glyph_atlas.image_id, ctx.glyph_atlas.pixels.items);
+    uploadGlyphAlpha(ctx, glyph_id, raster.alpha, raster.width, raster.height);
     ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, glyph_id, raster.metrics.advance_x) catch {};
     return glyph_id;
+}
+
+fn uploadGlyphAlpha(ctx: *Context, id: GlyphId, alpha: []const u8, width: u32, height: u32) void {
+    if (ctx.glyph_atlas.image_id == .none) return;
+    const glyph = ctx.glyph_atlas.get(id) orelse return;
+    const upload_len = @as(usize, width) * @as(usize, height) * 4;
+    if (upload_len == 0 or alpha.len != @as(usize, width) * @as(usize, height)) return;
+
+    const upload = ctx.gpa.alloc(u8, upload_len) catch return;
+    defer ctx.gpa.free(upload);
+    packAlphaRgba(upload, alpha, width, height);
+    image_ops.updateImageRect(ctx, ctx.glyph_atlas.image_id, glyph.atlas_x, glyph.atlas_y, width, height, upload);
+}
+
+fn packAlphaRgba(dst: []u8, alpha: []const u8, width: u32, height: u32) void {
+    var row: u32 = 0;
+    while (row < height) : (row += 1) {
+        var col: u32 = 0;
+        while (col < width) : (col += 1) {
+            const src = @as(usize, row) * @as(usize, width) + col;
+            const dst_index = src * 4;
+            dst[dst_index + 0] = 255;
+            dst[dst_index + 1] = 255;
+            dst[dst_index + 2] = 255;
+            dst[dst_index + 3] = alpha[src];
+        }
+    }
 }
 
 fn glyphPaint(ctx: *Context, glyph: GlyphRecord, x: f32, y: f32, tint: color.Color) color.Paint {

@@ -13,6 +13,7 @@ pub const Texture = struct {
     height: u32,
     format: image.TexFormat,
     pixels: []const u8,
+    generation: u64 = 0,
 };
 
 pub const Profile = struct {

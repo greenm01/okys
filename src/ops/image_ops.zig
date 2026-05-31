@@ -29,6 +29,17 @@ pub fn updateImage(ctx: *Context, id: ImageId, data: []const u8) void {
     backend.update_texture(backend.ctx, id, 0, 0, texture.width, texture.height, data);
 }
 
+pub fn updateImageRect(ctx: *Context, id: ImageId, x: u32, y: u32, w: u32, h: u32, data: []const u8) void {
+    const texture = ctx.textures.get(id) orelse return;
+    if (w == 0 or h == 0) return;
+    if (x >= texture.width or y >= texture.height) return;
+    if (w > texture.width - x or h > texture.height - y) return;
+    if (data.len != byteLen(w, h, texture.format)) return;
+
+    const backend = ctx.backend orelse return;
+    backend.update_texture(backend.ctx, id, x, y, w, h, data);
+}
+
 pub fn imageSize(ctx: *Context, id: ImageId) ?[2]u32 {
     const table_size = ctx.textures.size(id) orelse return null;
     if (ctx.backend) |backend| {

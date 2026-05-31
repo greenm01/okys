@@ -85,7 +85,11 @@ test "text ops create atlas upload glyph and draw textured quad" {
     });
     try testing.expect(glyph != GlyphId.none);
     try testing.expectEqual(@as(usize, 1), mock.update_texture_calls);
-    try testing.expectEqual(@as(usize, 16 * 16 * 4), mock.last_update_data_len);
+    try testing.expectEqual(@as(u32, 1), mock.last_update_x);
+    try testing.expectEqual(@as(u32, 1), mock.last_update_y);
+    try testing.expectEqual(@as(u32, 2), mock.last_update_width);
+    try testing.expectEqual(@as(u32, 2), mock.last_update_height);
+    try testing.expectEqual(@as(usize, 2 * 2 * 4), mock.last_update_data_len);
 
     text_ops.drawGlyph(ctx, glyph, 10, 20);
     try testing.expectEqual(@as(usize, 1), mock.triangles_calls);
@@ -270,6 +274,7 @@ test "loaded font text emits cached glyph triangles" {
     try testing.expect(advanced > 10);
     try testing.expectEqual(@as(usize, 1), mock.create_texture_calls);
     try testing.expectEqual(@as(usize, 1), mock.update_texture_calls);
+    try testing.expect(mock.last_update_data_len < defaultAtlasByteLen());
     try testing.expectEqual(@as(usize, 2), mock.triangles_calls);
     try testing.expect(mock.last_triangles.first_vertex.y < 32);
 }
@@ -302,6 +307,10 @@ fn surfaceHasAlpha(backend: *const SparseBackend) bool {
         if (backend.surface.items[i] != 0) return true;
     }
     return false;
+}
+
+fn defaultAtlasByteLen() usize {
+    return 2048 * 2048 * 4;
 }
 
 fn loadTestFont(ctx: *Context) ?c_int {

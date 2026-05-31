@@ -146,12 +146,14 @@ pub const PathTexture = struct {
     height: u32,
     format: image.TexFormat,
     pixels: []const u8,
+    generation: u64 = 0,
 };
 
 const PathTextureResource = struct {
     id: u32 = 0,
     width: u32 = 0,
     height: u32 = 0,
+    generation: u64 = 0,
     image: Image = .{},
     view: View = .{},
 };
@@ -803,6 +805,7 @@ pub const Device = struct {
         if (texture.pixels.len != @as(usize, texture.width) * @as(usize, texture.height) * 4) return;
 
         const resource = self.pathTextureResource(texture.id) orelse return;
+        var created = false;
         if (resource.image.id == 0 or resource.width != texture.width or resource.height != texture.height) {
             self.destroyPathTextureResource(resource);
             resource.id = texture.id;
@@ -810,11 +813,14 @@ pub const Device = struct {
             resource.height = texture.height;
             resource.image = sg.makeImage(pathTextureImageDesc(texture.width, texture.height));
             resource.view = sg.makeView(pathTextureViewDesc(resource.image));
+            created = true;
         }
+        if (!created and resource.generation == texture.generation) return;
 
         var image_data: sg.ImageData = .{};
         image_data.mip_levels[0] = rangeFromSlice(u8, texture.pixels);
         sg.updateImage(resource.image, image_data);
+        resource.generation = texture.generation;
     }
 
     fn pathTextureResource(self: *Device, id: u32) ?*PathTextureResource {

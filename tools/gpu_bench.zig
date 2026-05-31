@@ -137,6 +137,7 @@ fn setupScene(state: *SceneState) !void {
             .height = texture.height,
             .format = texture.format,
             .pixels = texture.pixels,
+            .generation = texture.generation,
         });
     }
 }

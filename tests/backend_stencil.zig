@@ -265,8 +265,10 @@ test "stencil backend texture callbacks retain and update rgba pixels" {
     };
     try testing.expect(iface.create_texture(iface.ctx, id, 2, 2, .rgba8, &pixels));
     try testing.expectEqualSlices(u8, &pixels, backend.textures.get(id).?.pixels.items);
+    const initial_generation = backend.textures.get(id).?.generation;
 
     const replacement = [_]u8{ 16, 32, 48, 255 };
     iface.update_texture(iface.ctx, id, 1, 0, 1, 1, &replacement);
     try testing.expectEqualSlices(u8, &replacement, backend.textures.get(id).?.pixels.items[4..8]);
+    try testing.expect(backend.textures.get(id).?.generation > initial_generation);
 }
