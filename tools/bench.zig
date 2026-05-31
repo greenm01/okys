@@ -84,6 +84,10 @@ const ProfileStats = struct {
     surface_bytes: usize = 0,
     texture_bytes: usize = 0,
     max_strip_segments: usize = 0,
+    multi_call_tiles: usize = 0,
+    max_calls_per_tile: usize = 0,
+    strip_call_order_breaks: usize = 0,
+    strip_spatial_order_breaks: usize = 0,
     frontend_frame_ns: u64 = 0,
     stroke_outline_ns: u64 = 0,
     stroke_outline_builds: usize = 0,
@@ -349,6 +353,10 @@ fn profileStats(profile: SparseProfile) ProfileStats {
         .surface_bytes = profile.frame_packet.surface_bytes,
         .texture_bytes = profile.frame_packet.texture_bytes,
         .max_strip_segments = profile.frame_packet.max_strip_segments,
+        .multi_call_tiles = profile.frame_packet.multi_call_tiles,
+        .max_calls_per_tile = profile.frame_packet.max_calls_per_tile,
+        .strip_call_order_breaks = profile.frame_packet.strip_call_order_breaks,
+        .strip_spatial_order_breaks = profile.frame_packet.strip_spatial_order_breaks,
     };
 }
 
@@ -427,6 +435,10 @@ fn averageProfile(total: ProfileStats, last: ProfileStats) ProfileStats {
         .surface_bytes = last.surface_bytes,
         .texture_bytes = last.texture_bytes,
         .max_strip_segments = last.max_strip_segments,
+        .multi_call_tiles = last.multi_call_tiles,
+        .max_calls_per_tile = last.max_calls_per_tile,
+        .strip_call_order_breaks = last.strip_call_order_breaks,
+        .strip_spatial_order_breaks = last.strip_spatial_order_breaks,
     };
 }
 
@@ -435,12 +447,12 @@ fn bytesOf(comptime T: type, count: usize) usize {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tfrontend_frame_ns\tstroke_outline_ns\tstroke_outline_builds\tstroke_calls\tstroke_source_paths\tstroke_source_points\tstroke_source_open_paths\tstroke_source_closed_paths\tstroke_outline_paths\tstroke_outline_points\tmax_stroke_outline_expansion_pct\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tmulti_call_tiles\tmax_calls_per_tile\tstrip_call_order_breaks\tstrip_spatial_order_breaks\tfrontend_frame_ns\tstroke_outline_ns\tstroke_outline_builds\tstroke_calls\tstroke_source_paths\tstroke_source_points\tstroke_source_open_paths\tstroke_source_closed_paths\tstroke_outline_paths\tstroke_outline_points\tmax_stroke_outline_expansion_pct\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
 }
 
 fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: []const u8, result: Result) void {
     _ = std.c.printf(
-        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(backend_name.len)),
@@ -467,6 +479,10 @@ fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: [
         u64ForPrint(result.profile.surface_bytes),
         u64ForPrint(result.profile.texture_bytes),
         u64ForPrint(result.profile.max_strip_segments),
+        u64ForPrint(result.profile.multi_call_tiles),
+        u64ForPrint(result.profile.max_calls_per_tile),
+        u64ForPrint(result.profile.strip_call_order_breaks),
+        u64ForPrint(result.profile.strip_spatial_order_breaks),
         u64ForPrint(result.profile.frontend_frame_ns),
         u64ForPrint(result.profile.stroke_outline_ns),
         u64ForPrint(result.profile.stroke_outline_builds),

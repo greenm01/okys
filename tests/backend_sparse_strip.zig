@@ -249,9 +249,15 @@ test "sparse solid paint composites calls in draw order" {
 
     queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 4, 4, 20, 20);
     queuePaintedRect(&iface, color.rgbaf(0, 0, 1, 0.5), 4, 4, 20, 20);
-    try testing.expect(backend.build());
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
 
     try testing.expectEqual([4]u8{ 128, 0, 128, 255 }, rgbaAt(backend, 8, 8));
+    try expectSpatialStripOrder(backend.strips.items);
+    try testing.expect(profile.frame_packet.multi_call_tiles > 0);
+    try testing.expectEqual(@as(usize, 2), profile.frame_packet.max_calls_per_tile);
+    try testing.expect(profile.frame_packet.strip_call_order_breaks > 0);
+    try testing.expectEqual(@as(usize, 0), profile.frame_packet.strip_spatial_order_breaks);
 }
 
 test "sparse linear gradient resolves into proof surface" {
@@ -546,4 +552,17 @@ fn rgbaAt(backend: *const Backend, x: u32, y: u32) [4]u8 {
 fn expectAlphaApprox(expected: u8, actual: u8) !void {
     const delta = @abs(@as(i16, expected) - @as(i16, actual));
     try testing.expect(delta <= 1);
+}
+
+fn expectSpatialStripOrder(strips: []const sparse.Strip) !void {
+    for (strips[1..], 1..) |s, i| {
+        const prev = strips[i - 1];
+        if (prev.y != s.y) {
+            try testing.expect(prev.y < s.y);
+        } else if (prev.x != s.x) {
+            try testing.expect(prev.x < s.x);
+        } else {
+            try testing.expect(prev.call_index <= s.call_index);
+        }
+    }
 }

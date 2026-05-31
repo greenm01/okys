@@ -58,6 +58,10 @@ pub const FramePacketStats = struct {
     packet_capacity_bytes: usize = 0,
     packet_slack_bytes: usize = 0,
     max_strip_segments: usize = 0,
+    multi_call_tiles: usize = 0,
+    max_calls_per_tile: usize = 0,
+    strip_call_order_breaks: usize = 0,
+    strip_spatial_order_breaks: usize = 0,
 };
 
 const SparseTexture = struct {
@@ -223,10 +227,7 @@ pub const Backend = struct {
             texture_capacity_bytes += texture.pixels.capacity;
         }
 
-        var max_strip_segments: usize = 0;
-        for (self.strips.items) |s| {
-            max_strip_segments = @max(max_strip_segments, s.segment_indices.count);
-        }
+        const strip_order = stripOrderStats(self.strips.items);
 
         const calls_bytes = bytesOf(EncodedCall, self.calls.items.len);
         const segments_bytes = bytesOf(Segment, self.segments.items.len);
@@ -268,10 +269,60 @@ pub const Backend = struct {
             .gpu_fine_upload_bytes = calls_bytes + segments_bytes + strips_bytes + strip_indices_bytes,
             .packet_capacity_bytes = packet_capacity_bytes,
             .packet_slack_bytes = packet_capacity_bytes - frame_packet_bytes,
-            .max_strip_segments = max_strip_segments,
+            .max_strip_segments = strip_order.max_strip_segments,
+            .multi_call_tiles = strip_order.multi_call_tiles,
+            .max_calls_per_tile = strip_order.max_calls_per_tile,
+            .strip_call_order_breaks = strip_order.call_order_breaks,
+            .strip_spatial_order_breaks = strip_order.spatial_order_breaks,
         };
     }
 };
+
+const StripOrderStats = struct {
+    max_strip_segments: usize = 0,
+    multi_call_tiles: usize = 0,
+    max_calls_per_tile: usize = 0,
+    call_order_breaks: usize = 0,
+    spatial_order_breaks: usize = 0,
+};
+
+fn stripOrderStats(strips: []const Strip) StripOrderStats {
+    var stats: StripOrderStats = .{};
+    var tile_start: usize = 0;
+    for (strips, 0..) |s, i| {
+        stats.max_strip_segments = @max(stats.max_strip_segments, s.segment_indices.count);
+        if (i > 0) {
+            const prev = strips[i - 1];
+            if (s.call_index < prev.call_index) stats.call_order_breaks += 1;
+            if (!stripOrderLessOrEqual(prev, s)) stats.spatial_order_breaks += 1;
+        }
+        if (i + 1 == strips.len or strips[i + 1].x != s.x or strips[i + 1].y != s.y) {
+            const calls_in_tile = countCallsInTile(strips[tile_start .. i + 1]);
+            stats.max_calls_per_tile = @max(stats.max_calls_per_tile, calls_in_tile);
+            if (calls_in_tile > 1) stats.multi_call_tiles += 1;
+            tile_start = i + 1;
+        }
+    }
+    return stats;
+}
+
+fn stripOrderLessOrEqual(a: Strip, b: Strip) bool {
+    if (a.y != b.y) return a.y < b.y;
+    if (a.x != b.x) return a.x < b.x;
+    return a.call_index <= b.call_index;
+}
+
+fn countCallsInTile(strips: []const Strip) usize {
+    if (strips.len == 0) return 0;
+    var count: usize = 1;
+    var last = strips[0].call_index;
+    for (strips[1..]) |s| {
+        if (s.call_index == last) continue;
+        count += 1;
+        last = s.call_index;
+    }
+    return count;
+}
 
 fn from(ctx: *anyopaque) *Backend {
     return @ptrCast(@alignCast(ctx));
