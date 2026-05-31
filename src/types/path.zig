@@ -30,6 +30,11 @@ pub const Winding = enum(i32) {
     cw = 2,
 };
 
+pub const ClipRule = enum(u8) {
+    nonzero = 0,
+    even_odd = 1,
+};
+
 /// One subpath: a contiguous range in the shared point buffer plus the flags a
 /// backend needs to rasterize it.
 pub const PathRange = struct {

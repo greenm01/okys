@@ -11,6 +11,7 @@ const ImageId = image.ImageId;
 const TexFormat = image.TexFormat;
 const Texture = image.Texture;
 const path = @import("../../types/path.zig");
+const ClipRule = path.ClipRule;
 const PathRange = path.PathRange;
 const Point = path.Point;
 const Vertex = path.Vertex;
@@ -83,6 +84,14 @@ pub const Backend = struct {
     antialias: bool = false,
     stencil_strokes: bool = false,
     flush_count: usize = 0,
+    clip_depth: usize = 0,
+    max_clip_depth: usize = 0,
+    clip_push_count: usize = 0,
+    clip_pop_count: usize = 0,
+    last_clip_rule: ClipRule = .nonzero,
+    last_clip_bounds: [4]f32 = .{ 0, 0, 0, 0 },
+    last_clip_path_count: usize = 0,
+    last_clip_point_count: usize = 0,
 
     pub fn create(gpa: std.mem.Allocator) !*Backend {
         return createWithFlags(gpa, 0);
@@ -131,6 +140,8 @@ pub const Backend = struct {
             .fill = fill,
             .stroke = stroke,
             .triangles = triangles,
+            .push_clip_path = pushClipPath,
+            .pop_clip_path = popClipPath,
         };
     }
 
@@ -519,6 +530,23 @@ fn stroke(ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, width: 
 
 fn triangles(ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, verts: []const Vertex) void {
     from(ctx).queueTriangles(paint, scissor, verts);
+}
+
+fn pushClipPath(ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) void {
+    const self = from(ctx);
+    self.clip_push_count += 1;
+    self.clip_depth += 1;
+    self.max_clip_depth = @max(self.max_clip_depth, self.clip_depth);
+    self.last_clip_rule = rule;
+    self.last_clip_bounds = bounds;
+    self.last_clip_path_count = paths.len;
+    self.last_clip_point_count = points.len;
+}
+
+fn popClipPath(ctx: *anyopaque) void {
+    const self = from(ctx);
+    self.clip_pop_count += 1;
+    self.clip_depth -|= 1;
 }
 
 fn validFillPath(p: PathRange, point_len: usize) bool {

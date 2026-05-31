@@ -6,6 +6,7 @@ const color = @import("../types/color.zig");
 const Paint = color.Paint;
 const Scissor = color.Scissor;
 const path = @import("../types/path.zig");
+const ClipRule = path.ClipRule;
 const Point = path.Point;
 const PathRange = path.PathRange;
 const Vertex = path.Vertex;
@@ -30,4 +31,6 @@ pub const RenderInterface = struct {
     fill: *const fn (ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, bounds: [4]f32, paths: []const PathRange, points: []const Point) void,
     stroke: *const fn (ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, width: f32, paths: []const PathRange, points: []const Point) void,
     triangles: *const fn (ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, verts: []const Vertex) void,
+    push_clip_path: *const fn (ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) void,
+    pop_clip_path: *const fn (ctx: *anyopaque) void,
 };

@@ -2,6 +2,7 @@
 //! the active render backend.
 
 const Context = @import("../state/context.zig").Context;
+const path = @import("../types/path.zig");
 const frame_profile = @import("../state/frame_profile.zig");
 const flatten = @import("../systems/flatten.zig");
 const stroke_outline = @import("../systems/stroke.zig");
@@ -26,6 +27,25 @@ pub fn fill(ctx: *Context) void {
         ctx.cache.paths.items,
         ctx.cache.points.items,
     );
+}
+
+pub fn pushClipPath(ctx: *Context, rule: path.ClipRule) void {
+    flatten.flatten(ctx);
+    if (ctx.cache.paths.items.len == 0 or ctx.cache.points.items.len == 0) return;
+
+    const backend = ctx.backend orelse return;
+    backend.push_clip_path(
+        backend.ctx,
+        rule,
+        ctx.cache.bounds,
+        ctx.cache.paths.items,
+        ctx.cache.points.items,
+    );
+}
+
+pub fn popClipPath(ctx: *Context) void {
+    const backend = ctx.backend orelse return;
+    backend.pop_clip_path(backend.ctx);
 }
 
 pub fn stroke(ctx: *Context) void {

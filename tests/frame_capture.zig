@@ -36,8 +36,32 @@ test "captured frame owns draw data after source frame clears" {
     try testing.expectEqual(@as(usize, 1), mock.viewport_calls);
     try testing.expectEqual(@as(usize, 2), mock.fill_calls);
     try testing.expectEqual(@as(usize, 1), mock.stroke_calls);
+    try testing.expectEqual(@as(usize, 1), mock.push_clip_path_calls);
+    try testing.expectEqual(@as(usize, 1), mock.pop_clip_path_calls);
+    try testing.expectEqual(@as(usize, 0), mock.clip_depth);
     try testing.expect(mock.last_stroke.point_count > 0);
     try testing.expect(mock.last_stroke.points_ptr != 0);
+}
+
+test "captured frame owns and replays clip path data" {
+    var frame = try captureScene(testing.allocator);
+    defer frame.deinit();
+
+    var mock: mock_backend.MockBackend = .{};
+    frame.replay(mock.interface());
+
+    try testing.expectEqual(@as(usize, 1), mock.push_clip_path_calls);
+    try testing.expectEqual(@as(usize, 1), mock.pop_clip_path_calls);
+    try testing.expectEqual(@as(usize, 1), mock.max_clip_depth);
+    try testing.expectEqual(.even_odd, mock.last_clip.rule);
+    try testing.expectEqual(@as(usize, 1), mock.last_clip.path_count);
+    try testing.expect(mock.last_clip.point_count >= 4);
+    try testing.expect(mock.last_clip.paths_ptr != 0);
+    try testing.expect(mock.last_clip.points_ptr != 0);
+    try testing.expectApproxEqAbs(@as(f32, 2), mock.last_clip.bounds[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 2), mock.last_clip.bounds[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 56), mock.last_clip.bounds[2], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 56), mock.last_clip.bounds[3], 0.001);
 }
 
 test "captured frame replays texture and draw events into mock backend" {
@@ -64,6 +88,9 @@ test "captured frame replays into stencil cover backend" {
     defer backend.destroy();
     frame.replay(backend.interface());
 
+    try testing.expectEqual(@as(usize, 1), backend.clip_push_count);
+    try testing.expectEqual(@as(usize, 1), backend.clip_pop_count);
+    try testing.expectEqual(@as(usize, 0), backend.clip_depth);
     try testing.expect(backend.buildStencilPass());
     try testing.expect(backend.path_draws.items.len > 0);
     try testing.expect(backend.frag_params.items.len > 0);
@@ -78,6 +105,9 @@ test "captured frame replays into sparse strip backend" {
     backend.fill_rule = .even_odd;
     frame.replay(backend.interface());
 
+    try testing.expectEqual(@as(usize, 1), backend.clip_push_count);
+    try testing.expectEqual(@as(usize, 1), backend.clip_pop_count);
+    try testing.expectEqual(@as(usize, 0), backend.clip_depth);
     try testing.expect(backend.build());
     try testing.expect(backend.strips.items.len > 0);
     try testing.expect(backend.alphas.items.len > 0);
@@ -94,6 +124,10 @@ fn captureScene(gpa: std.mem.Allocator) !CapturedFrame {
 
     frame_ops.beginFrame(ctx, 64, 64, 1);
     const image_id = createCheckerImage(ctx);
+
+    path_ops.beginPath(ctx);
+    path_ops.rect(ctx, 2, 2, 54, 54);
+    render_ops.pushClipPath(ctx, .even_odd);
 
     paint_ops.fillColor(ctx, color.rgbaf(0.1, 0.2, 0.3, 1));
     path_ops.beginPath(ctx);
@@ -118,6 +152,7 @@ fn captureScene(gpa: std.mem.Allocator) !CapturedFrame {
     path_ops.lineTo(ctx, 24, 32);
     path_ops.lineTo(ctx, 40, 46);
     render_ops.stroke(ctx);
+    render_ops.popClipPath(ctx);
 
     queueTriangle(&frame);
     frame_ops.cancelFrame(ctx);

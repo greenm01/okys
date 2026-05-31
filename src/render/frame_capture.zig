@@ -11,6 +11,7 @@ const Paint = color.Paint;
 const Scissor = color.Scissor;
 const ImageId = image.ImageId;
 const TexFormat = image.TexFormat;
+const ClipRule = path.ClipRule;
 const PathRange = path.PathRange;
 const Point = path.Point;
 const Vertex = path.Vertex;
@@ -24,6 +25,8 @@ pub const EventKind = enum {
     fill,
     stroke,
     triangles,
+    push_clip_path,
+    pop_clip_path,
 };
 
 pub const Range = struct {
@@ -47,6 +50,7 @@ pub const Event = struct {
     scissor: Scissor = undefined,
     bounds: [4]f32 = .{ 0, 0, 0, 0 },
     stroke_width: f32 = 0,
+    clip_rule: ClipRule = .nonzero,
     path_range: Range = .{},
     point_range: Range = .{},
     vertex_range: Range = .{},
@@ -93,6 +97,8 @@ pub const CapturedFrame = struct {
             .fill = fill,
             .stroke = stroke,
             .triangles = triangles,
+            .push_clip_path = pushClipPath,
+            .pop_clip_path = popClipPath,
         };
     }
 
@@ -144,6 +150,14 @@ pub const CapturedFrame = struct {
                     &event.scissor,
                     verticesFor(self, event.vertex_range),
                 ),
+                .push_clip_path => target.push_clip_path(
+                    target.ctx,
+                    event.clip_rule,
+                    event.bounds,
+                    pathsFor(self, event.path_range),
+                    pointsFor(self, event.point_range),
+                ),
+                .pop_clip_path => target.pop_clip_path(target.ctx),
             }
         }
     }
@@ -280,6 +294,24 @@ fn triangles(ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, vert
         .scissor = scissor.*,
         .vertex_range = vertex_range,
     }) catch {};
+}
+
+fn pushClipPath(ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) void {
+    const self = from(ctx);
+    const path_range = self.appendPaths(paths) catch return;
+    const point_range = self.appendPoints(points) catch return;
+    self.events.append(self.gpa, .{
+        .kind = .push_clip_path,
+        .clip_rule = rule,
+        .bounds = bounds,
+        .path_range = path_range,
+        .point_range = point_range,
+    }) catch {};
+}
+
+fn popClipPath(ctx: *anyopaque) void {
+    const self = from(ctx);
+    self.events.append(self.gpa, .{ .kind = .pop_clip_path }) catch {};
 }
 
 fn bytesFor(frame: *const CapturedFrame, range: Range) []const u8 {

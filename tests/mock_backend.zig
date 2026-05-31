@@ -4,6 +4,7 @@ const Paint = okys.types.color.Paint;
 const Scissor = okys.types.color.Scissor;
 const ImageId = okys.types.image.ImageId;
 const TexFormat = okys.types.image.TexFormat;
+const ClipRule = okys.types.path.ClipRule;
 const Point = okys.types.path.Point;
 const PathRange = okys.types.path.PathRange;
 const Vertex = okys.types.path.Vertex;
@@ -20,6 +21,15 @@ pub const DrawCall = struct {
     points_ptr: usize = 0,
 };
 
+pub const ClipCall = struct {
+    rule: ClipRule = .nonzero,
+    bounds: [4]f32 = .{ 0, 0, 0, 0 },
+    path_count: usize = 0,
+    point_count: usize = 0,
+    paths_ptr: usize = 0,
+    points_ptr: usize = 0,
+};
+
 pub const MockBackend = struct {
     viewport_calls: usize = 0,
     flush_calls: usize = 0,
@@ -27,6 +37,10 @@ pub const MockBackend = struct {
     fill_calls: usize = 0,
     stroke_calls: usize = 0,
     triangles_calls: usize = 0,
+    push_clip_path_calls: usize = 0,
+    pop_clip_path_calls: usize = 0,
+    clip_depth: usize = 0,
+    max_clip_depth: usize = 0,
     create_texture_calls: usize = 0,
     update_texture_calls: usize = 0,
     delete_texture_calls: usize = 0,
@@ -48,6 +62,7 @@ pub const MockBackend = struct {
     last_deleted_id: ImageId = .none,
     last_fill: DrawCall = .{},
     last_stroke: DrawCall = .{},
+    last_clip: ClipCall = .{},
 
     pub fn interface(self: *MockBackend) RenderInterface {
         return .{
@@ -62,6 +77,8 @@ pub const MockBackend = struct {
             .fill = fill,
             .stroke = stroke,
             .triangles = triangles,
+            .push_clip_path = pushClipPath,
+            .pop_clip_path = popClipPath,
         };
     }
 
@@ -138,6 +155,20 @@ pub const MockBackend = struct {
         _ = verts;
         from(ctx).triangles_calls += 1;
     }
+
+    fn pushClipPath(ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) void {
+        const self = from(ctx);
+        self.push_clip_path_calls += 1;
+        self.clip_depth += 1;
+        self.max_clip_depth = @max(self.max_clip_depth, self.clip_depth);
+        self.last_clip = clipCall(rule, bounds, paths, points);
+    }
+
+    fn popClipPath(ctx: *anyopaque) void {
+        const self = from(ctx);
+        self.pop_clip_path_calls += 1;
+        self.clip_depth -|= 1;
+    }
 };
 
 fn drawCall(paint: *const Paint, scissor: *const Scissor, bounds: [4]f32, width: f32, paths: []const PathRange, points: []const Point) DrawCall {
@@ -146,6 +177,17 @@ fn drawCall(paint: *const Paint, scissor: *const Scissor, bounds: [4]f32, width:
         .scissor = scissor.*,
         .bounds = bounds,
         .width = width,
+        .path_count = paths.len,
+        .point_count = points.len,
+        .paths_ptr = if (paths.len > 0) @intFromPtr(paths.ptr) else 0,
+        .points_ptr = if (points.len > 0) @intFromPtr(points.ptr) else 0,
+    };
+}
+
+fn clipCall(rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) ClipCall {
+    return .{
+        .rule = rule,
+        .bounds = bounds,
         .path_count = paths.len,
         .point_count = points.len,
         .paths_ptr = if (paths.len > 0) @intFromPtr(paths.ptr) else 0,
