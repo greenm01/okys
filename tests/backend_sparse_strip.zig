@@ -508,6 +508,54 @@ test "sparse triangle input encodes one closed triangle segment set" {
     try testing.expectEqual(@as(u32, 3), backend.calls.items[0].segments.count);
 }
 
+test "sparse debug dumps tile segments strip metadata and coverage rows" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, 4.25, 4.25, 12.25, 12.25);
+    try testing.expect(backend.build());
+
+    var tile_segments = std.ArrayList(u8).empty;
+    defer tile_segments.deinit(testing.allocator);
+    var tile_writer: std.Io.Writer.Allocating = .fromArrayList(testing.allocator, &tile_segments);
+    try sparse.debug.writeTileSegments(&tile_writer.writer, backend.strips.items, backend.strip_segment_indices.items);
+    tile_segments = tile_writer.toArrayList();
+    try testing.expect(std.mem.startsWith(u8, tile_segments.items, "tile_x\ttile_y\tcall_index\tsegment_count\tsegment_indices\n"));
+    try testing.expect(std.mem.indexOf(u8, tile_segments.items, "\t0\t1\t") != null);
+
+    var strips = std.ArrayList(u8).empty;
+    defer strips.deinit(testing.allocator);
+    var strip_writer: std.Io.Writer.Allocating = .fromArrayList(testing.allocator, &strips);
+    try sparse.debug.writeStrips(&strip_writer.writer, backend.strips.items);
+    strips = strip_writer.toArrayList();
+    try testing.expect(std.mem.startsWith(u8, strips.items, "strip_index\tx\ty\tcall_index\tsegment_start\tsegment_count\talpha_start\talpha_count\tflags\n"));
+    try testing.expect(std.mem.indexOf(u8, strips.items, "\t16\t") != null);
+
+    var coverage = std.ArrayList(u8).empty;
+    defer coverage.deinit(testing.allocator);
+    var coverage_writer: std.Io.Writer.Allocating = .fromArrayList(testing.allocator, &coverage);
+    try sparse.debug.writeCoverage(&coverage_writer.writer, backend.strips.items, backend.alphas.items);
+    coverage = coverage_writer.toArrayList();
+    try testing.expect(std.mem.startsWith(u8, coverage.items, "strip_index\tx\ty\tcall_index\trow\talphas\n"));
+    try testing.expect(std.mem.indexOf(u8, coverage.items, ",") != null);
+
+    const bad_strip = sparse.Strip{
+        .x = 0,
+        .y = 0,
+        .call_index = 0,
+        .alpha = .{ .start = @intCast(backend.alphas.items.len + 1), .count = sparse.strip.tile_area },
+    };
+    const bad_strips = [_]sparse.Strip{bad_strip};
+    var skipped = std.ArrayList(u8).empty;
+    defer skipped.deinit(testing.allocator);
+    var skipped_writer: std.Io.Writer.Allocating = .fromArrayList(testing.allocator, &skipped);
+    try sparse.debug.writeCoverage(&skipped_writer.writer, &bad_strips, backend.alphas.items);
+    skipped = skipped_writer.toArrayList();
+    try testing.expectEqualStrings("strip_index\tx\ty\tcall_index\trow\talphas\n", skipped.items);
+}
+
 fn queueRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f32, x1: f32, y1: f32) void {
     queuePaintedRect(iface, color.rgbaf(1, 1, 1, 1), x0, y0, x1, y1);
 }

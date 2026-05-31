@@ -17,6 +17,7 @@ const RenderInterface = @import("../../render/interface.zig").RenderInterface;
 pub const encode = @import("encode.zig");
 pub const bin = @import("bin.zig");
 pub const coarse = @import("coarse.zig");
+pub const debug = @import("debug.zig");
 pub const fine = @import("fine.zig");
 pub const strip = @import("strip.zig");
 
