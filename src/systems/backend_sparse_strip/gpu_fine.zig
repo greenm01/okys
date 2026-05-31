@@ -6,6 +6,7 @@ const std = @import("std");
 const color = @import("../../types/color.zig");
 const encode = @import("encode.zig");
 const strip = @import("strip.zig");
+const xforms = @import("../transform.zig");
 
 pub const task_fill: u32 = 0;
 pub const task_alpha_fill: u32 = 1;
@@ -25,7 +26,17 @@ pub const SolidPaint = struct {
 };
 
 pub const GpuCall = extern struct {
-    color: [4]f32 = .{ 0, 0, 0, 0 },
+    paint_mat0: [4]f32 = .{ 0, 0, 0, 0 },
+    paint_mat1: [4]f32 = .{ 0, 0, 0, 0 },
+    paint_mat2: [4]f32 = .{ 0, 0, 0, 0 },
+    scissor_mat0: [4]f32 = .{ 0, 0, 0, 0 },
+    scissor_mat1: [4]f32 = .{ 0, 0, 0, 0 },
+    scissor_mat2: [4]f32 = .{ 0, 0, 0, 0 },
+    inner_color: [4]f32 = .{ 0, 0, 0, 0 },
+    outer_color: [4]f32 = .{ 0, 0, 0, 0 },
+    scissor_extent_scale: [4]f32 = .{ 1, 1, 1, 1 },
+    extent_radius_feather: [4]f32 = .{ 0, 0, 0, 1 },
+    params: [4]f32 = .{ 0, 0, 0, 0 },
     bounds: [4]f32 = .{ 0, 0, 0, 0 },
     segment_start: u32 = 0,
     segment_count: u32 = 0,
@@ -33,7 +44,7 @@ pub const GpuCall = extern struct {
     task_count: u32 = 0,
     flags: u32 = 0,
     fill_rule: u32 = 0,
-    _pad0: u32 = 0,
+    image_id: u32 = 0,
     _pad1: u32 = 0,
 };
 
@@ -106,18 +117,7 @@ pub fn build(
     }
 
     for (calls) |call| {
-        const solid = solidPaint(call) orelse {
-            packet.stats.fallback_reason = if (!scissorDisabled(&call.scissor)) .unsupported_scissor else .unsupported_paint;
-            return false;
-        };
-        packet.calls.appendAssumeCapacity(.{
-            .color = .{ solid.r, solid.g, solid.b, solid.a },
-            .bounds = callBounds(call, segments),
-            .segment_start = call.segments.start,
-            .segment_count = call.segments.count,
-            .flags = if (solid.a >= 1) call_flag_opaque else 0,
-            .fill_rule = @intFromEnum(fillRuleForCall(fill_rule, call.kind)),
-        });
+        packet.calls.appendAssumeCapacity(packCall(fill_rule, call, segments));
     }
 
     const width = pixelExtent(viewport_width);
@@ -236,6 +236,64 @@ pub fn solidPaint(call: encode.EncodedCall) ?SolidPaint {
     };
 }
 
+pub fn hasImageCalls(packet: *const Packet) bool {
+    for (packet.calls.items) |call| {
+        if (call.image_id != 0) return true;
+    }
+    return false;
+}
+
+fn packCall(default_rule: strip.FillRule, call: encode.EncodedCall, segments: []const encode.Segment) GpuCall {
+    const paint_matrix = matrixColumns(inverseOrIdentity(&call.paint.xform));
+    const scissor_enabled = !scissorDisabled(&call.scissor);
+    const scissor_matrix = if (scissor_enabled)
+        matrixColumns(xforms.inverse(&call.scissor.xform) orelse .{ 0, 0, 0, 0, 0, 0 })
+    else
+        [_][4]f32{ zeroColumn(), zeroColumn(), zeroColumn() };
+    const scissor_scale = if (scissor_enabled) .{
+        @sqrt(call.scissor.xform[0] * call.scissor.xform[0] + call.scissor.xform[2] * call.scissor.xform[2]),
+        @sqrt(call.scissor.xform[1] * call.scissor.xform[1] + call.scissor.xform[3] * call.scissor.xform[3]),
+    } else [2]f32{ 1, 1 };
+    const inner = premul(call.paint.inner_color);
+    const outer = premul(call.paint.outer_color);
+    const image_id: u32 = if (call.paint.image > 0) @intCast(call.paint.image) else 0;
+
+    return .{
+        .paint_mat0 = paint_matrix[0],
+        .paint_mat1 = paint_matrix[1],
+        .paint_mat2 = paint_matrix[2],
+        .scissor_mat0 = scissor_matrix[0],
+        .scissor_mat1 = scissor_matrix[1],
+        .scissor_mat2 = scissor_matrix[2],
+        .inner_color = colorVec(inner),
+        .outer_color = colorVec(outer),
+        .scissor_extent_scale = .{
+            call.scissor.extent[0],
+            call.scissor.extent[1],
+            scissor_scale[0],
+            scissor_scale[1],
+        },
+        .extent_radius_feather = .{
+            call.paint.extent[0],
+            call.paint.extent[1],
+            call.paint.radius,
+            call.paint.feather,
+        },
+        .params = .{
+            if (scissor_enabled) 1 else 0,
+            if (image_id != 0) 1 else 0,
+            if (image_id != 0) @floatFromInt(image_id) else 0,
+            0,
+        },
+        .bounds = callBounds(call, segments),
+        .segment_start = call.segments.start,
+        .segment_count = call.segments.count,
+        .flags = if (isOpaque(call)) call_flag_opaque else 0,
+        .fill_rule = @intFromEnum(fillRuleForCall(default_rule, call.kind)),
+        .image_id = image_id,
+    };
+}
+
 pub fn fillRuleForCall(default_rule: strip.FillRule, kind: strip.CallKind) strip.FillRule {
     return switch (kind) {
         .fill => default_rule,
@@ -320,12 +378,47 @@ fn scissorDisabled(scissor: *const color.Scissor) bool {
     return scissor.extent[0] < 0 or scissor.extent[1] < 0;
 }
 
+fn isOpaque(call: encode.EncodedCall) bool {
+    return call.paint.image == 0 and scissorDisabled(&call.scissor) and call.paint.inner_color.a >= 1 and call.paint.outer_color.a >= 1;
+}
+
+fn premul(c: color.Color) color.Color {
+    return .{
+        .r = c.r * c.a,
+        .g = c.g * c.a,
+        .b = c.b * c.a,
+        .a = c.a,
+    };
+}
+
+fn inverseOrIdentity(t: *const color.Transform) color.Transform {
+    return xforms.inverse(t) orelse xforms.identity();
+}
+
+fn matrixColumns(t: color.Transform) [3][4]f32 {
+    return .{
+        .{ t[0], t[1], 0, 0 },
+        .{ t[2], t[3], 0, 0 },
+        .{ t[4], t[5], 1, 0 },
+    };
+}
+
+fn zeroColumn() [4]f32 {
+    return .{ 0, 0, 0, 0 };
+}
+
+fn colorVec(c: color.Color) [4]f32 {
+    return .{ c.r, c.g, c.b, c.a };
+}
+
 comptime {
-    std.debug.assert(@sizeOf(GpuCall) == 64);
-    std.debug.assert(@offsetOf(GpuCall, "color") == 0);
-    std.debug.assert(@offsetOf(GpuCall, "bounds") == 16);
-    std.debug.assert(@offsetOf(GpuCall, "segment_start") == 32);
-    std.debug.assert(@offsetOf(GpuCall, "task_start") == 40);
+    std.debug.assert(@sizeOf(GpuCall) == 224);
+    std.debug.assert(@offsetOf(GpuCall, "paint_mat0") == 0);
+    std.debug.assert(@offsetOf(GpuCall, "scissor_mat0") == 48);
+    std.debug.assert(@offsetOf(GpuCall, "inner_color") == 96);
+    std.debug.assert(@offsetOf(GpuCall, "bounds") == 176);
+    std.debug.assert(@offsetOf(GpuCall, "segment_start") == 192);
+    std.debug.assert(@offsetOf(GpuCall, "task_start") == 200);
     std.debug.assert(@sizeOf(GpuFineTask) == 32);
     std.debug.assert(@offsetOf(GpuFineTask, "x") == 0);
     std.debug.assert(@offsetOf(GpuFineTask, "call_index") == 8);

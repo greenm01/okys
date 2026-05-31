@@ -218,6 +218,10 @@ pub const Backend = struct {
         coarse.build(self.gpa, self.tiles.items, &self.strips, &self.strip_segment_indices) catch return false;
         if (profile) |p| p.coarse_ns += elapsedSince(coarse_start);
 
+        const texture_views_start = profileStart(profile);
+        self.rebuildTextureViews() catch return false;
+        if (profile) |p| p.texture_views_ns += elapsedSince(texture_views_start);
+
         const supported = gpu_fine.build(
             self.gpa,
             self.fill_rule,

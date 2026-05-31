@@ -1,6 +1,16 @@
 @block common
 struct GpuCall {
-    vec4 color;
+    vec4 paint_mat0;
+    vec4 paint_mat1;
+    vec4 paint_mat2;
+    vec4 scissor_mat0;
+    vec4 scissor_mat1;
+    vec4 scissor_mat2;
+    vec4 inner_color;
+    vec4 outer_color;
+    vec4 scissor_extent_scale;
+    vec4 extent_radius_feather;
+    vec4 params;
     vec4 bounds;
     uint segment_start;
     uint segment_count;
@@ -8,7 +18,7 @@ struct GpuCall {
     uint task_count;
     uint flags;
     uint fill_rule;
-    uint _pad0;
+    uint image_id;
     uint _pad1;
 };
 
@@ -121,6 +131,26 @@ vec4 over(vec4 src, vec4 dst) {
     float inv_a = 1.0 - src.a;
     return vec4(src.rgb + dst.rgb * inv_a, src.a + dst.a * inv_a);
 }
+
+mat3 paint_mat(GpuCall call) {
+    return mat3(call.paint_mat0.xyz, call.paint_mat1.xyz, call.paint_mat2.xyz);
+}
+
+mat3 scissor_mat(GpuCall call) {
+    return mat3(call.scissor_mat0.xyz, call.scissor_mat1.xyz, call.scissor_mat2.xyz);
+}
+
+float sdroundrect(vec2 pt, vec2 ext, float rad) {
+    vec2 ext2 = ext - vec2(rad, rad);
+    vec2 d = abs(pt) - ext2;
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - rad;
+}
+
+float scissor_mask(GpuCall call, vec2 p) {
+    vec2 sc = abs((scissor_mat(call) * vec3(p, 1.0)).xy) - call.scissor_extent_scale.xy;
+    sc = vec2(0.5, 0.5) - sc * call.scissor_extent_scale.zw;
+    return clamp(sc.x, 0.0, 1.0) * clamp(sc.y, 0.0, 1.0);
+}
 @end
 
 @cs sparse_clear
@@ -173,6 +203,8 @@ layout(binding=3) readonly buffer tasks_buf {
 };
 
 layout(binding=4, rgba8) uniform image2D fine_surface_img;
+layout(binding=5) uniform texture2D image_tex;
+layout(binding=0) uniform sampler image_smp;
 
 layout(local_size_x=8, local_size_y=4, local_size_z=1) in;
 
@@ -208,7 +240,28 @@ void main() {
         return;
     }
 
-    vec4 src = vec4(call.color.rgb * alpha, call.color.a * alpha);
+    vec2 sample_pos = vec2(float(x) + 0.5, float(y) + 0.5);
+    if (call.params.x > 0.5) {
+        alpha *= scissor_mask(call, sample_pos);
+        if (alpha <= 0.0) {
+            return;
+        }
+    }
+
+    vec2 pt = (paint_mat(call) * vec3(sample_pos, 1.0)).xy;
+    vec4 paint;
+    if (call.params.y > 0.5) {
+        vec2 image_extent = max(abs(call.extent_radius_feather.xy), vec2(0.0001));
+        vec4 sample_color = texture(sampler2D(image_tex, image_smp), pt / image_extent);
+        float sample_alpha = sample_color.a * call.inner_color.a;
+        paint = vec4(sample_color.rgb * sample_alpha, sample_alpha);
+    } else {
+        float feather = max(call.extent_radius_feather.w, 0.0001);
+        float d = clamp((sdroundrect(pt, call.extent_radius_feather.xy, call.extent_radius_feather.z) + feather * 0.5) / feather, 0.0, 1.0);
+        paint = mix(call.inner_color, call.outer_color, d);
+    }
+
+    vec4 src = vec4(paint.rgb * alpha, paint.a * alpha);
     vec4 dst = imageLoad(fine_surface_img, ivec2(int(x), int(y)));
     imageStore(fine_surface_img, ivec2(int(x), int(y)), over(src, dst));
 }

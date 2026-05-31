@@ -42,6 +42,8 @@ pub const sparse_segments_view_slot = sparse_fine_shader.VIEW_segments_buf;
 pub const sparse_strip_indices_view_slot = sparse_fine_shader.VIEW_strip_indices_buf;
 pub const sparse_tasks_view_slot = sparse_fine_shader.VIEW_tasks_buf;
 pub const sparse_fine_surface_view_slot = sparse_fine_shader.VIEW_fine_surface_img;
+pub const sparse_image_view_slot = sparse_fine_shader.VIEW_image_tex;
+pub const sparse_image_sampler_slot = sparse_fine_shader.SMP_image_smp;
 pub const sparse_clear_params_slot = sparse_fine_shader.UB_clear_params;
 pub const sparse_fine_params_slot = sparse_fine_shader.UB_fine_params;
 
@@ -328,6 +330,7 @@ pub const Device = struct {
         pass: Pass,
         packet: *const gpu_fine.Packet,
         segments: []const sparse_encode.Segment,
+        textures: []const PathTexture,
         surface_width: u32,
         surface_height: u32,
         dest: BlitRect,
@@ -339,9 +342,13 @@ pub const Device = struct {
         if (packet.calls.items.len == 0) return false;
         if (packet.tasks.items.len == 0) return false;
 
+        self.ensurePathTextureResources(textures);
+        if (!self.sparseTexturesAvailable(packet)) return false;
+
         self.ensureSparseFineResources(surface_width, surface_height, packet, segments);
         if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) return false;
         if (self.sparse_surface_storage_view.id == 0 or self.sparse_surface_texture_view.id == 0) return false;
+        if (self.path_texture_sampler.id == 0 or self.path_default_view.id == 0) return false;
 
         uploadStorageBuffer(gpu_fine.GpuCall, self.sparse_call_buffer.buffer, packet.calls.items);
         uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
@@ -359,15 +366,18 @@ pub const Device = struct {
         sg.dispatch(dispatchGroups(surface_width, 8), dispatchGroups(surface_height, 8), 1);
 
         sg.applyPipeline(self.sparse_fine_pipeline);
-        sg.applyBindings(sparseFineBindings(
-            self.sparse_call_buffer.view,
-            self.sparse_segment_buffer.view,
-            self.sparse_strip_index_buffer.view,
-            self.sparse_task_buffer.view,
-            self.sparse_surface_storage_view,
-        ));
         for (packet.calls.items) |call| {
             if (call.task_count == 0) continue;
+            const texture = self.sparseTextureForCall(call);
+            sg.applyBindings(sparseFineBindings(
+                self.sparse_call_buffer.view,
+                self.sparse_segment_buffer.view,
+                self.sparse_strip_index_buffer.view,
+                self.sparse_task_buffer.view,
+                self.sparse_surface_storage_view,
+                texture.view,
+                self.path_texture_sampler,
+            ));
             const fine_params: SparseFineParams = .{
                 .surface_width = @intCast(surface_width),
                 .surface_height = @intCast(surface_height),
@@ -747,6 +757,27 @@ pub const Device = struct {
         return .{ .view = self.path_default_view };
     }
 
+    fn sparseTexturesAvailable(self: *const Device, packet: *const gpu_fine.Packet) bool {
+        for (packet.calls.items) |call| {
+            if (call.image_id == 0) continue;
+            for (self.path_textures) |texture| {
+                if (texture.id == call.image_id and texture.view.id != 0) break;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn sparseTextureForCall(self: *const Device, call: gpu_fine.GpuCall) PathTextureResource {
+        if (call.image_id != 0) {
+            for (self.path_textures) |texture| {
+                if (texture.id == call.image_id and texture.view.id != 0) return texture;
+            }
+        }
+        return .{ .view = self.path_default_view };
+    }
+
     fn ensurePathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
         const index_count = @max(index_capacity, 1);
         const missing = self.path_stencil_shader.id == 0 or
@@ -1014,6 +1045,8 @@ pub fn sparseFineBindings(
     strip_indices_view: View,
     tasks_view: View,
     surface_view: View,
+    image_view: View,
+    image_sampler: Sampler,
 ) Bindings {
     var bindings: Bindings = .{};
     bindings.views[sparse_calls_view_slot] = calls_view;
@@ -1021,6 +1054,8 @@ pub fn sparseFineBindings(
     bindings.views[sparse_strip_indices_view_slot] = strip_indices_view;
     bindings.views[sparse_tasks_view_slot] = tasks_view;
     bindings.views[sparse_fine_surface_view_slot] = surface_view;
+    bindings.views[sparse_image_view_slot] = image_view;
+    bindings.samplers[sparse_image_sampler_slot] = image_sampler;
     return bindings;
 }
 

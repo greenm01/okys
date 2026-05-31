@@ -210,7 +210,7 @@ test "sparse GPU fine packet preserves per-call draw-order ranges" {
     }
 }
 
-test "sparse GPU fine packet falls back for unsupported paint and scissor" {
+test "sparse GPU fine packet encodes gradient image and scissor paint state" {
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
     const backend = try Backend.create(testing.allocator);
@@ -223,8 +223,10 @@ test "sparse GPU fine packet falls back for unsupported paint and scissor" {
     var packet: sparse.gpu_fine.Packet = .{};
     defer packet.deinit(testing.allocator);
 
-    try testing.expect(!backend.buildGpuFinePacket(&packet, null));
-    try testing.expectEqual(.unsupported_paint, packet.stats.fallback_reason);
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(@as(usize, 1), packet.calls.items.len);
+    try testing.expectEqual(@as(f32, 0), packet.calls.items[0].params[1]);
+    try testing.expect(packet.calls.items[0].inner_color[0] > packet.calls.items[0].outer_color[0]);
 
     backend.clearQueued();
     const scissor: color.Scissor = .{
@@ -232,8 +234,23 @@ test "sparse GPU fine packet falls back for unsupported paint and scissor" {
         .extent = .{ 4, 4 },
     };
     queuePaintRect(&iface, color.solid(color.rgbaf(0, 1, 0, 1)), 0, 0, 16, 16, scissor);
-    try testing.expect(!backend.buildGpuFinePacket(&packet, null));
-    try testing.expectEqual(.unsupported_scissor, packet.stats.fallback_reason);
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(@as(usize, 1), packet.calls.items.len);
+    try testing.expectEqual(@as(f32, 1), packet.calls.items[0].params[0]);
+
+    backend.clearQueued();
+    const pixels = [_]u8{
+        255, 0, 0,   255, 0,   255, 0,   255,
+        0,   0, 255, 255, 255, 255, 255, 255,
+    };
+    const id = image_ops.createImageRGBA(ctx, 2, 2, &pixels);
+    try testing.expect(id != .none);
+    const image_paint = paint_ops.imagePattern(ctx, 0, 0, 2, 2, 0, @intCast(@intFromEnum(id)), 1);
+    queuePaintRect(&iface, image_paint, 0, 0, 8, 8, disabled_scissor);
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(@as(usize, 1), packet.calls.items.len);
+    try testing.expectEqual(@as(f32, 1), packet.calls.items[0].params[1]);
+    try testing.expectEqual(@intFromEnum(id), packet.calls.items[0].image_id);
 }
 
 test "sparse frame packet bounds diagnostics track clipped out calls" {

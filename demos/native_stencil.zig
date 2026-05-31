@@ -33,6 +33,7 @@ var sparse_ctx: ?*Context = null;
 var sparse_backend: ?*SparseBackend = null;
 var sparse_checker_image: ImageId = .none;
 var sparse_gpu_packet: okys.systems.backend_sparse_strip.GpuFinePacket = .{};
+var sparse_device_textures: std.ArrayList(sokol_device.PathTexture) = .empty;
 
 pub fn main() void {
     app.run(.{
@@ -111,6 +112,7 @@ fn frame() callconv(.c) void {
             blit_pass,
             &sparse_gpu_packet,
             bottom_b.segments.items,
+            sparseTexturesForDevice(bottom_b),
             @intFromFloat(scene_width),
             @intFromFloat(scene_height),
             .{
@@ -159,7 +161,23 @@ fn cleanup() callconv(.c) void {
         sparse_checker_image = .none;
     }
     sparse_gpu_packet.deinit(std.heap.c_allocator);
+    sparse_device_textures.deinit(std.heap.c_allocator);
     device.deinit();
+}
+
+fn sparseTexturesForDevice(backend: *SparseBackend) []const sokol_device.PathTexture {
+    sparse_device_textures.clearRetainingCapacity();
+    sparse_device_textures.ensureTotalCapacity(std.heap.c_allocator, backend.texture_views.items.len) catch return &.{};
+    for (backend.texture_views.items) |texture| {
+        sparse_device_textures.appendAssumeCapacity(.{
+            .id = @intFromEnum(texture.id),
+            .width = texture.width,
+            .height = texture.height,
+            .format = texture.format,
+            .pixels = texture.pixels,
+        });
+    }
+    return sparse_device_textures.items;
 }
 
 fn createCheckerImage(c: *Context) ImageId {
