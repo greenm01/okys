@@ -6,6 +6,8 @@ const
   OKY_ROUND* = 1
   OKY_BEVEL* = 2
   OKY_CW* = 2
+  OKY_ALIGN_LEFT* = 1 shl 0
+  OKY_ALIGN_BASELINE* = 1 shl 6
 
 type
   OKYcontext {.importc: "OKYcontext", header: "okys.h", incompleteStruct.} = object
@@ -23,6 +25,20 @@ type
     inner_color: OKYcolor
     outer_color: OKYcolor
     image: cint
+
+  OKYglyphPosition {.importc: "OKYglyphPosition", header: "okys.h", bycopy.} = object
+    str:  cstring
+    x:    cfloat
+    minx: cfloat
+    maxx: cfloat
+
+  OKYtextRow {.importc: "OKYtextRow", header: "okys.h", bycopy.} = object
+    start: cstring
+    `end`: cstring
+    next:  cstring
+    width: cfloat
+    minx:  cfloat
+    maxx:  cfloat
 
 proc okyAbiVersion(): cuint {.importc, header: "okys.h".}
 proc okyVersionString(): cstring {.importc, header: "okys.h".}
@@ -93,6 +109,21 @@ proc okyCircle(ctx: ptr OKYcontext; cx, cy, r: cfloat) {.importc, header: "okys.
 
 proc okyFill(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
 proc okyStroke(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
+
+proc okyCreateFont(ctx: ptr OKYcontext; name, filename: cstring): cint {.importc, header: "okys.h".}
+proc okyCreateFontMem(ctx: ptr OKYcontext; name: cstring; data: ptr uint8; ndata, freeData: cint): cint {.importc, header: "okys.h".}
+proc okyFindFont(ctx: ptr OKYcontext; name: cstring): cint {.importc, header: "okys.h".}
+proc okyFontSize(ctx: ptr OKYcontext; size: cfloat) {.importc, header: "okys.h".}
+proc okyFontFaceId(ctx: ptr OKYcontext; font: cint) {.importc, header: "okys.h".}
+proc okyFontFace(ctx: ptr OKYcontext; font: cstring) {.importc, header: "okys.h".}
+proc okyTextAlign(ctx: ptr OKYcontext; align: cint) {.importc, header: "okys.h".}
+proc okyTextLetterSpacing(ctx: ptr OKYcontext; spacing: cfloat) {.importc, header: "okys.h".}
+proc okyTextLineHeight(ctx: ptr OKYcontext; lineHeight: cfloat) {.importc, header: "okys.h".}
+proc okyText(ctx: ptr OKYcontext; x, y: cfloat; str: cstring; `end`: cstring): cfloat {.importc, header: "okys.h".}
+proc okyTextBox(ctx: ptr OKYcontext; x, y, breakRowWidth: cfloat; str: cstring; `end`: cstring) {.importc, header: "okys.h".}
+proc okyTextGlyphPositions(ctx: ptr OKYcontext; x, y: cfloat; str: cstring; `end`: cstring; positions: ptr OKYglyphPosition; maxPositions: cint): cint {.importc, header: "okys.h".}
+proc okyTextMetrics(ctx: ptr OKYcontext; ascender, descender, lineh: ptr cfloat) {.importc, header: "okys.h".}
+proc okyTextBreakLines(ctx: ptr OKYcontext; str: cstring; `end`: cstring; breakRowWidth: cfloat; rows: ptr OKYtextRow; maxRows: cint): cint {.importc, header: "okys.h".}
 
 proc near(a, b: cfloat): bool =
   abs(float(a - b)) < 0.001
@@ -185,6 +216,38 @@ okyStrokeColor(ctx, red)
 okyFill(ctx)
 okyStroke(ctx)
 okyRestore(ctx)
+
+# text
+doAssert okyCreateFont(ctx, nil, nil) == 0
+doAssert okyCreateFontMem(ctx, "bad", nil, 0, 0) == 0
+let fontId = okyCreateFont(ctx, "sans", "/usr/share/fonts/TTF/DejaVuSans.ttf")
+if fontId > 0:
+  doAssert okyFindFont(ctx, "sans") == fontId
+  okyFontFace(ctx, "sans")
+okyFontFaceId(ctx, 0)
+okyFontSize(ctx, 16.0)
+okyTextAlign(ctx, OKY_ALIGN_LEFT or OKY_ALIGN_BASELINE)
+okyTextLetterSpacing(ctx, 0.0)
+okyTextLineHeight(ctx, 1.0)
+
+let xAdv = okyText(ctx, 10.0, 20.0, "hello", nil)
+doAssert xAdv > 10.0
+
+okyTextBox(ctx, 10.0, 20.0, 200.0, "wrap this text", nil)
+
+var glyphs: array[16, OKYglyphPosition]
+let nGlyphs = okyTextGlyphPositions(ctx, 0.0, 0.0, "abc", nil, addr glyphs[0], 16)
+doAssert nGlyphs == 3
+doAssert near(glyphs[0].x, 0.0)
+
+var asc, desc, lh: cfloat
+okyTextMetrics(ctx, addr asc, addr desc, addr lh)
+doAssert asc > 0.0
+doAssert lh > 0.0
+
+var rows: array[4, OKYtextRow]
+let nRows = okyTextBreakLines(ctx, "one two three", nil, 60.0, addr rows[0], 4)
+doAssert nRows >= 1
 
 okyEndFrame(ctx)
 okyCancelFrame(ctx)

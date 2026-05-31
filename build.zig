@@ -9,7 +9,9 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    const dep_tatfi = b.dependency("tatfi", .{});
     const mod_sokol = dep_sokol.module("sokol");
+    const mod_tatfi = dep_tatfi.module("tatfi");
     const mod_okys_shader = try sokol.shdc.createModule(b, "okys_shader", mod_sokol, .{
         .shdc_dep = dep_sokol.builder.dependency("shdc", .{}),
         .input = "src/shaders/smoke.glsl",
@@ -77,6 +79,7 @@ pub fn build(b: *std.Build) !void {
     okys_mod.addImport("okys_path_shader", mod_okys_path_shader);
     okys_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
     okys_mod.addImport("okys_sparse_fine_shader", mod_okys_sparse_fine_shader);
+    okys_mod.addImport("tatfi", mod_tatfi);
 
     const tiger_data_mod = b.createModule(.{
         .root_source_file = b.path("tools/tiger_data.zig"),
@@ -189,6 +192,7 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
     lib_mod.addIncludePath(b.path("include"));
+    lib_mod.addImport("tatfi", mod_tatfi);
 
     const lib = b.addLibrary(.{
         .name = "okys",

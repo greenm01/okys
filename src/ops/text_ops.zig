@@ -6,6 +6,7 @@ const color = @import("../types/color.zig");
 const image_ops = @import("image_ops.zig");
 const paint_ops = @import("paint_ops.zig");
 const text_types = @import("../types/text.zig");
+const draw_state = @import("../state/draw_state.zig");
 const Vertex = @import("../types/path.zig").Vertex;
 const xforms = @import("../systems/transform.zig");
 
@@ -21,6 +22,45 @@ pub const fallback_advance: f32 = fallback_font_size * 0.5;
 pub const fallback_ascender: f32 = fallback_font_size * 0.8;
 pub const fallback_descender: f32 = -fallback_font_size * 0.2;
 pub const fallback_line_height: f32 = fallback_font_size * 1.4;
+
+pub fn createFont(ctx: *Context, name: []const u8, filename: []const u8) c_int {
+    if (name.len == 0 or filename.len == 0) return 0;
+    return @intCast(ctx.fonts.createFont(ctx.gpa, name, filename) catch return 0);
+}
+
+pub fn createFontMem(ctx: *Context, name: []const u8, data: []const u8) c_int {
+    if (name.len == 0 or data.len == 0) return 0;
+    return @intCast(ctx.fonts.createFontMem(ctx.gpa, name, data) catch return 0);
+}
+
+pub fn findFont(ctx: *const Context, name: []const u8) c_int {
+    if (name.len == 0) return 0;
+    return @intCast(ctx.fonts.findFont(name));
+}
+
+pub fn fontSize(ctx: *Context, size: f32) void {
+    if (size > 0) ctx.state().font_size = size;
+}
+
+pub fn fontFaceId(ctx: *Context, id: c_int) void {
+    ctx.state().font_id = if (ctx.fonts.hasFont(id)) id else 0;
+}
+
+pub fn fontFace(ctx: *Context, name: []const u8) void {
+    fontFaceId(ctx, findFont(ctx, name));
+}
+
+pub fn textAlign(ctx: *Context, alignment: c_int) void {
+    if (alignment >= 0) ctx.state().text_align = @intCast(alignment);
+}
+
+pub fn textLetterSpacing(ctx: *Context, spacing: f32) void {
+    ctx.state().text_letter_spacing = spacing;
+}
+
+pub fn textLineHeight(ctx: *Context, line_height: f32) void {
+    if (line_height > 0) ctx.state().text_line_height = line_height;
+}
 
 pub fn initGlyphAtlas(ctx: *Context, width: u32, height: u32) bool {
     if (width == 0 or height == 0) return false;
@@ -97,9 +137,8 @@ pub fn textWidth(bytes: []const u8) f32 {
 }
 
 pub fn text(ctx: *Context, x: f32, y: f32, bytes: []const u8) f32 {
-    _ = ctx;
     _ = y;
-    return x + textWidth(bytes);
+    return x + textWidthFor(ctx, bytes);
 }
 
 pub fn textBox(ctx: *Context, x: f32, y: f32, break_row_width: f32, bytes: []const u8) void {
@@ -107,19 +146,35 @@ pub fn textBox(ctx: *Context, x: f32, y: f32, break_row_width: f32, bytes: []con
     var offset: usize = 0;
     var line_y = y;
     while (offset < bytes.len) {
-        const count = breakLines(bytes[offset..], break_row_width, &rows);
+        const count = breakLines(ctx, bytes[offset..], break_row_width, &rows);
         if (count == 0) break;
         for (rows[0..@intCast(count)]) |row| {
             const start = offsetFromPtr(bytes, row.start) orelse offset;
             const end = offsetFromPtr(bytes, row.end) orelse start;
             _ = text(ctx, x, line_y, bytes[start..end]);
-            line_y += fallback_line_height;
+            line_y += textMetrics(ctx).line_height;
             offset = offsetFromPtr(bytes, row.next) orelse end;
         }
     }
 }
 
-pub fn textMetrics() struct { ascender: f32, descender: f32, line_height: f32 } {
+pub fn textMetrics(ctx: ?*const Context) struct { ascender: f32, descender: f32, line_height: f32 } {
+    if (ctx) |c| {
+        const state = c.states.items[c.states.items.len - 1];
+        if (c.fonts.metrics(c.gpa, state.font_id, state.font_size, state.text_line_height)) |metrics| {
+            return .{
+                .ascender = metrics.ascender,
+                .descender = metrics.descender,
+                .line_height = metrics.line_height,
+            };
+        }
+        const scale = state.font_size / fallback_font_size;
+        return .{
+            .ascender = fallback_ascender * scale,
+            .descender = fallback_descender * scale,
+            .line_height = fallback_line_height * scale * state.text_line_height,
+        };
+    }
     return .{
         .ascender = fallback_ascender,
         .descender = fallback_descender,
@@ -127,32 +182,34 @@ pub fn textMetrics() struct { ascender: f32, descender: f32, line_height: f32 } 
     };
 }
 
-pub fn glyphPositions(x: f32, bytes: []const u8, positions: []TextGlyphPosition) c_int {
+pub fn glyphPositions(ctx: ?*const Context, x: f32, bytes: []const u8, positions: []TextGlyphPosition) c_int {
     var count: usize = 0;
     var i: usize = 0;
-    var pen_x = x;
+    var pen_x = alignedX(ctx, x, bytes);
     while (i < bytes.len and count < positions.len) {
         const b = bytes[i];
         if (isLineBreak(b)) break;
         if (b == 0) break;
+        const char_len = codepointByteLen(bytes[i..]);
+        const codepoint = decodeCodepoint(bytes[i .. i + char_len]);
+        const advance = glyphAdvance(ctx, codepoint);
 
         positions[count] = .{
             .str = bytes.ptr + i,
             .x = pen_x,
             .minx = pen_x,
-            .maxx = pen_x + fallback_advance,
+            .maxx = pen_x + advance,
         };
         count += 1;
-        pen_x += fallback_advance;
-        i += codepointByteLen(bytes[i..]);
+        pen_x += advance + letterSpacing(ctx);
+        i += char_len;
     }
     return @intCast(count);
 }
 
-pub fn breakLines(bytes: []const u8, break_row_width: f32, rows: []TextRow) c_int {
+pub fn breakLines(ctx: ?*const Context, bytes: []const u8, break_row_width: f32, rows: []TextRow) c_int {
     if (rows.len == 0 or bytes.len == 0) return 0;
 
-    const max_glyphs = glyphLimitForWidth(break_row_width);
     var count: usize = 0;
     var pos: usize = 0;
     while (pos < bytes.len and count < rows.len) {
@@ -164,7 +221,9 @@ pub fn breakLines(bytes: []const u8, break_row_width: f32, rows: []TextRow) c_in
         var next = pos;
         var last_space_start: ?usize = null;
         var last_space_end: ?usize = null;
-        var glyphs: usize = 0;
+        var row_width: f32 = 0;
+        var end_width: f32 = 0;
+        var last_space_width: f32 = 0;
 
         while (next < bytes.len) {
             const b = bytes[next];
@@ -186,37 +245,43 @@ pub fn breakLines(bytes: []const u8, break_row_width: f32, rows: []TextRow) c_in
             }
 
             const char_len = codepointByteLen(bytes[next..]);
+            const codepoint = decodeCodepoint(bytes[next .. next + char_len]);
+            const advance = glyphAdvance(ctx, codepoint);
             if (isBreakSpace(b)) {
                 if (last_space_start == null or next > last_space_start.?) {
                     last_space_start = next;
                     last_space_end = next + char_len;
+                    last_space_width = row_width;
                 }
             }
 
-            if (glyphs >= max_glyphs) {
+            if (row_width > 0 and row_width + advance > break_row_width and break_row_width > 0) {
                 if (last_space_start) |space_start| {
                     end = trimTrailingSpaces(bytes, start, space_start);
                     next = skipSpaces(bytes, last_space_end.?);
+                    end_width = last_space_width;
                 } else {
                     end = next;
                 }
                 if (end == start) {
                     end = next + char_len;
                     next = end;
+                    end_width = advance;
                 }
                 break;
             }
 
             next += char_len;
             end = next;
-            glyphs += 1;
+            row_width += advance + letterSpacing(ctx);
+            end_width = row_width;
         }
 
         if (next >= bytes.len) {
             end = trimTrailingSpaces(bytes, start, end);
         }
 
-        const width = textWidth(bytes[start..end]);
+        const width = if (end_width > 0) textWidthFor(ctx, bytes[start..end]) else end_width;
         rows[count] = .{
             .start = bytes.ptr + start,
             .end = bytes.ptr + end,
@@ -230,6 +295,47 @@ pub fn breakLines(bytes: []const u8, break_row_width: f32, rows: []TextRow) c_in
     }
 
     return @intCast(count);
+}
+
+fn textWidthFor(ctx: ?*const Context, bytes: []const u8) f32 {
+    var width: f32 = 0;
+    var i: usize = 0;
+    var emitted: usize = 0;
+    while (i < bytes.len) {
+        const b = bytes[i];
+        if (b == 0 or isLineBreak(b)) break;
+        const char_len = codepointByteLen(bytes[i..]);
+        width += glyphAdvance(ctx, decodeCodepoint(bytes[i .. i + char_len]));
+        emitted += 1;
+        i += char_len;
+    }
+    if (emitted > 1) width += @as(f32, @floatFromInt(emitted - 1)) * letterSpacing(ctx);
+    return width;
+}
+
+fn glyphAdvance(ctx: ?*const Context, codepoint: u21) f32 {
+    if (ctx) |c| {
+        const state = c.states.items[c.states.items.len - 1];
+        if (c.fonts.glyphAdvance(c.gpa, state.font_id, state.font_size, codepoint)) |advance| {
+            return advance;
+        }
+        return fallback_advance * (state.font_size / fallback_font_size);
+    }
+    return fallback_advance;
+}
+
+fn letterSpacing(ctx: ?*const Context) f32 {
+    if (ctx) |c| return c.states.items[c.states.items.len - 1].text_letter_spacing;
+    return 0;
+}
+
+fn alignedX(ctx: ?*const Context, x: f32, bytes: []const u8) f32 {
+    const c = ctx orelse return x;
+    const alignment = c.states.items[c.states.items.len - 1].text_align;
+    const width = textWidthFor(ctx, bytes);
+    if (alignment & draw_state.text_align.right != 0) return x - width;
+    if (alignment & draw_state.text_align.center != 0) return x - width * 0.5;
+    return x;
 }
 
 fn glyphPaint(ctx: *Context, glyph: GlyphRecord, x: f32, y: f32, tint: color.Color) color.Paint {
@@ -293,12 +399,6 @@ fn countLineCodepoints(bytes: []const u8) usize {
     return count;
 }
 
-fn glyphLimitForWidth(width: f32) usize {
-    if (width <= 0) return 1;
-    const raw = @as(usize, @intFromFloat(@floor(width / fallback_advance)));
-    return @max(raw, 1);
-}
-
 fn codepointByteLen(bytes: []const u8) usize {
     if (bytes.len == 0) return 0;
     const b0 = bytes[0];
@@ -307,6 +407,18 @@ fn codepointByteLen(bytes: []const u8) usize {
     if (b0 >= 0xE0 and b0 <= 0xEF and bytes.len >= 3 and isContinuation(bytes[1]) and isContinuation(bytes[2])) return 3;
     if (b0 >= 0xF0 and b0 <= 0xF4 and bytes.len >= 4 and isContinuation(bytes[1]) and isContinuation(bytes[2]) and isContinuation(bytes[3])) return 4;
     return 1;
+}
+
+fn decodeCodepoint(bytes: []const u8) u21 {
+    if (bytes.len == 0) return 0xfffd;
+    const b0 = bytes[0];
+    return switch (bytes.len) {
+        1 => b0,
+        2 => (@as(u21, b0 & 0x1f) << 6) | @as(u21, bytes[1] & 0x3f),
+        3 => (@as(u21, b0 & 0x0f) << 12) | (@as(u21, bytes[1] & 0x3f) << 6) | @as(u21, bytes[2] & 0x3f),
+        4 => (@as(u21, b0 & 0x07) << 18) | (@as(u21, bytes[1] & 0x3f) << 12) | (@as(u21, bytes[2] & 0x3f) << 6) | @as(u21, bytes[3] & 0x3f),
+        else => 0xfffd,
+    };
 }
 
 fn isContinuation(byte: u8) bool {

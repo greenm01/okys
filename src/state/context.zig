@@ -11,6 +11,7 @@ const FrameArena = @import("arena.zig").FrameArena;
 const FrameProfile = @import("frame_profile.zig").FrameProfile;
 const Textures = @import("textures.zig").Textures;
 const GlyphAtlas = @import("glyph_atlas.zig").GlyphAtlas;
+const FontStore = @import("fonts.zig").FontStore;
 const RenderInterface = @import("../render/interface.zig").RenderInterface;
 const backend_selection = @import("../render/backend_selection.zig");
 const BackendKind = backend_selection.BackendKind;
@@ -31,6 +32,7 @@ pub const Context = struct {
     frame_profile: FrameProfile = .{},
     textures: Textures,
     glyph_atlas: GlyphAtlas = .{},
+    fonts: FontStore = .{},
     backend: ?RenderInterface = null,
 
     width: f32 = 0,
@@ -63,6 +65,7 @@ pub const Context = struct {
         self.stroke_outline.deinit(gpa);
         self.frame_arena.deinit();
         self.glyph_atlas.deinit(gpa);
+        self.fonts.deinit(gpa);
         self.textures.deinit();
         gpa.destroy(self);
     }

@@ -18,6 +18,7 @@ pub const state = struct {
     pub const frame_profile = @import("state/frame_profile.zig");
     pub const textures = @import("state/textures.zig");
     pub const glyph_atlas = @import("state/glyph_atlas.zig");
+    pub const fonts = @import("state/fonts.zig");
     pub const context = @import("state/context.zig");
 };
 

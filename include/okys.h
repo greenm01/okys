@@ -42,6 +42,16 @@ enum OKYwinding {
     OKY_CW = 2,
 };
 
+enum OKYalign {
+    OKY_ALIGN_LEFT = 1 << 0,
+    OKY_ALIGN_CENTER = 1 << 1,
+    OKY_ALIGN_RIGHT = 1 << 2,
+    OKY_ALIGN_TOP = 1 << 3,
+    OKY_ALIGN_MIDDLE = 1 << 4,
+    OKY_ALIGN_BOTTOM = 1 << 5,
+    OKY_ALIGN_BASELINE = 1 << 6,
+};
+
 /* Opaque context handle. Created with okyCreate, destroyed with okyDelete. */
 typedef struct OKYcontext OKYcontext;
 
@@ -179,6 +189,16 @@ void okyEllipse(OKYcontext *ctx, float cx, float cy, float rx, float ry);
 void okyCircle(OKYcontext *ctx, float cx, float cy, float r);
 
 /* --- text --------------------------------------------------------------- */
+int okyCreateFont(OKYcontext *ctx, const char *name, const char *filename);
+int okyCreateFontMem(OKYcontext *ctx, const char *name, unsigned char *data,
+                     int ndata, int free_data);
+int okyFindFont(OKYcontext *ctx, const char *name);
+void okyFontSize(OKYcontext *ctx, float size);
+void okyFontFaceId(OKYcontext *ctx, int font);
+void okyFontFace(OKYcontext *ctx, const char *font);
+void okyTextAlign(OKYcontext *ctx, int align);
+void okyTextLetterSpacing(OKYcontext *ctx, float spacing);
+void okyTextLineHeight(OKYcontext *ctx, float line_height);
 float okyText(OKYcontext *ctx, float x, float y, const char *string,
               const char *end);
 void okyTextBox(OKYcontext *ctx, float x, float y, float break_row_width,

@@ -46,6 +46,7 @@ test "all production modules analyze" {
     _ = okys.state.frame_profile;
     _ = okys.state.textures;
     _ = okys.state.glyph_atlas;
+    _ = okys.state.fonts;
     _ = okys.state.context;
     _ = okys.ops.frame;
     _ = okys.ops.path;

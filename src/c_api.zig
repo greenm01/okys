@@ -304,6 +304,51 @@ export fn okyCircle(ctx: ?*Context, cx: f32, cy: f32, r: f32) void {
 
 // --- text ------------------------------------------------------------------
 
+export fn okyCreateFont(ctx: ?*Context, name: ?[*]const u8, filename: ?[*]const u8) c_int {
+    if (ctx == null or name == null or filename == null) return 0;
+    return text_ops.createFont(ctx.?, stringSlice(name, null), stringSlice(filename, null));
+}
+
+export fn okyCreateFontMem(ctx: ?*Context, name: ?[*]const u8, data: ?[*]u8, ndata: c_int, free_data: c_int) c_int {
+    defer {
+        if (free_data != 0) {
+            if (data) |ptr| std.c.free(@ptrCast(ptr));
+        }
+    }
+    if (ctx == null or name == null or data == null or ndata <= 0) return 0;
+    return text_ops.createFontMem(ctx.?, stringSlice(name, null), data.?[0..@intCast(ndata)]);
+}
+
+export fn okyFindFont(ctx: ?*Context, name: ?[*]const u8) c_int {
+    if (ctx == null or name == null) return 0;
+    return text_ops.findFont(ctx.?, stringSlice(name, null));
+}
+
+export fn okyFontSize(ctx: ?*Context, size: f32) void {
+    if (ctx) |c| text_ops.fontSize(c, size);
+}
+
+export fn okyFontFaceId(ctx: ?*Context, font: c_int) void {
+    if (ctx) |c| text_ops.fontFaceId(c, font);
+}
+
+export fn okyFontFace(ctx: ?*Context, font: ?[*]const u8) void {
+    if (ctx == null or font == null) return;
+    text_ops.fontFace(ctx.?, stringSlice(font, null));
+}
+
+export fn okyTextAlign(ctx: ?*Context, alignment: c_int) void {
+    if (ctx) |c| text_ops.textAlign(c, alignment);
+}
+
+export fn okyTextLetterSpacing(ctx: ?*Context, spacing: f32) void {
+    if (ctx) |c| text_ops.textLetterSpacing(c, spacing);
+}
+
+export fn okyTextLineHeight(ctx: ?*Context, line_height: f32) void {
+    if (ctx) |c| text_ops.textLineHeight(c, line_height);
+}
+
 export fn okyText(ctx: ?*Context, x: f32, y: f32, string: ?[*]const u8, end: ?[*]const u8) f32 {
     if (ctx == null) return x;
     const bytes = stringSlice(string, end);
@@ -321,12 +366,12 @@ export fn okyTextGlyphPositions(ctx: ?*Context, x: f32, y: f32, string: ?[*]cons
     if (ctx == null or positions == null or max_positions <= 0) return 0;
     const bytes = stringSlice(string, end);
     const len: usize = @intCast(max_positions);
-    return text_ops.glyphPositions(x, bytes, positions.?[0..len]);
+    return text_ops.glyphPositions(ctx.?, x, bytes, positions.?[0..len]);
 }
 
 export fn okyTextMetrics(ctx: ?*Context, ascender: ?*f32, descender: ?*f32, lineh: ?*f32) void {
     if (ctx == null) return;
-    const metrics = text_ops.textMetrics();
+    const metrics = text_ops.textMetrics(ctx.?);
     if (ascender) |out| out.* = metrics.ascender;
     if (descender) |out| out.* = metrics.descender;
     if (lineh) |out| out.* = metrics.line_height;
@@ -336,7 +381,7 @@ export fn okyTextBreakLines(ctx: ?*Context, string: ?[*]const u8, end: ?[*]const
     if (ctx == null or rows == null or max_rows <= 0) return 0;
     const bytes = stringSlice(string, end);
     const len: usize = @intCast(max_rows);
-    return text_ops.breakLines(bytes, break_row_width, rows.?[0..len]);
+    return text_ops.breakLines(ctx.?, bytes, break_row_width, rows.?[0..len]);
 }
 
 // --- render ----------------------------------------------------------------

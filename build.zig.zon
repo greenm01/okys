@@ -8,6 +8,10 @@
             .url = "git+https://github.com/floooh/sokol-zig.git#712ff4bf36761592656a7f648b2e80c59bfa6c95",
             .hash = "sokol-0.1.0-pb1HK8RqNwCA1y9yR1y0VNeYPv0m2TxtWsQP9y3w6rrS",
         },
+        .tatfi = .{
+            .url = "git+https://git.sr.ht/~asibahi/tatfi#ba2e4072e54688a55dadb25624ca0aa3cc6c85ff",
+            .hash = "tatfi-0.1.3-PJjJTGhUDgB_TpR6Jbf36ufEffBiw16sTK8llIJwHfqQ",
+        },
     },
     .paths = .{
         "build.zig",

@@ -10,6 +10,16 @@ pub const LineCap = enum(u8) { butt, round, square };
 pub const LineJoin = enum(u8) { miter, round, bevel };
 pub const max_line_dashes = 16;
 
+pub const text_align = struct {
+    pub const left: u32 = 1 << 0;
+    pub const center: u32 = 1 << 1;
+    pub const right: u32 = 1 << 2;
+    pub const top: u32 = 1 << 3;
+    pub const middle: u32 = 1 << 4;
+    pub const bottom: u32 = 1 << 5;
+    pub const baseline: u32 = 1 << 6;
+};
+
 pub const State = struct {
     fill: Paint,
     stroke: Paint,
@@ -23,6 +33,11 @@ pub const State = struct {
     alpha: f32,
     xform: Transform,
     scissor: Scissor,
+    font_size: f32,
+    font_id: i32,
+    text_align: u32,
+    text_letter_spacing: f32,
+    text_line_height: f32,
 
     pub fn default() State {
         return .{
@@ -39,6 +54,11 @@ pub const State = struct {
             .xform = .{ 1, 0, 0, 1, 0, 0 },
             // extent[0] < 0 -> no scissor
             .scissor = .{ .xform = .{ 0, 0, 0, 0, 0, 0 }, .extent = .{ -1, -1 } },
+            .font_size = 16.0,
+            .font_id = 0,
+            .text_align = text_align.left | text_align.baseline,
+            .text_letter_spacing = 0,
+            .text_line_height = 1.0,
         };
     }
 };

@@ -95,6 +95,20 @@ int main(void) {
     okyStroke(ctx);
 
     const char *sample = "one two three";
+    assert(okyCreateFont(ctx, NULL, NULL) == 0);
+    assert(okyCreateFontMem(ctx, "bad", NULL, 0, 0) == 0);
+    int sans = okyCreateFont(ctx, "sans", "/usr/share/fonts/TTF/DejaVuSans.ttf");
+    if (sans > 0) {
+        assert(okyFindFont(ctx, "sans") == sans);
+        okyFontFaceId(ctx, sans);
+        okyFontSize(ctx, 18.0f);
+    }
+    okyTextAlign(ctx, OKY_ALIGN_LEFT | OKY_ALIGN_BASELINE);
+    okyTextLetterSpacing(ctx, 0.0f);
+    okyTextLineHeight(ctx, 1.0f);
+    okyFontFaceId(ctx, 0);
+    okyFontSize(ctx, 16.0f);
+
     float tx = okyText(ctx, 10.0f, 20.0f, sample, sample + 3);
     assert(tx > 33.9f && tx < 34.1f);
     okyTextBox(ctx, 0.0f, 0.0f, 56.0f, sample, NULL);
