@@ -19,6 +19,15 @@ int main(void) {
     assert(ctx != NULL);
     OKYcontext *sparse_ctx = okyCreate(OKY_SPARSE_STRIP);
     assert(sparse_ctx != NULL);
+    OKYgraphicsDesc graphics_desc = {0};
+    graphics_desc.backend = OKY_GRAPHICS_BACKEND_GL;
+    graphics_desc.color_format = OKY_PIXEL_FORMAT_RGBA8;
+    graphics_desc.depth_format = OKY_PIXEL_FORMAT_DEPTH_STENCIL;
+    graphics_desc.sample_count = 1;
+    assert(okySetupGraphics(NULL, &graphics_desc) == 0);
+    assert(okySetupGraphics(sparse_ctx, NULL) == 0);
+    assert(okySetRenderTarget(NULL, NULL) == 0);
+    assert(okySetupGL(NULL, 1) == 0);
     okySetupWebGPU(NULL, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);
     okySetWebGPURenderTarget(NULL, NULL, 0, 0);
     okySetupWebGPU(sparse_ctx, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);

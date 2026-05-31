@@ -1,6 +1,8 @@
 #ifndef OKYS_H
 #define OKYS_H
 
+#include <stdint.h>
+
 /*
  * okys - a 2D vector graphics library with a NanoVG-style canvas API.
  *
@@ -28,6 +30,22 @@ enum OKYcreateFlags {
 enum OKYwebGPUTextureFormat {
     OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM = 1,
     OKY_WEBGPU_TEXTURE_FORMAT_RGBA8_UNORM = 2,
+};
+
+enum OKYgraphicsBackend {
+    OKY_GRAPHICS_BACKEND_GL = 1,
+    OKY_GRAPHICS_BACKEND_METAL = 2,
+    OKY_GRAPHICS_BACKEND_D3D11 = 3,
+    OKY_GRAPHICS_BACKEND_VULKAN = 4,
+    OKY_GRAPHICS_BACKEND_WEBGPU = 5,
+};
+
+enum OKYpixelFormat {
+    OKY_PIXEL_FORMAT_NONE = 0,
+    OKY_PIXEL_FORMAT_BGRA8 = 1,
+    OKY_PIXEL_FORMAT_RGBA8 = 2,
+    OKY_PIXEL_FORMAT_DEPTH_STENCIL = 3,
+    OKY_PIXEL_FORMAT_DEPTH = 4,
 };
 
 enum OKYlineCap {
@@ -97,6 +115,58 @@ typedef struct OKYtextRow {
     float maxx;
 } OKYtextRow;
 
+typedef struct OKYgraphicsDesc {
+    int backend;
+    int color_format;
+    int depth_format;
+    int sample_count;
+
+    const void *metal_device;
+
+    const void *d3d11_device;
+    const void *d3d11_device_context;
+
+    const void *vulkan_instance;
+    const void *vulkan_physical_device;
+    const void *vulkan_device;
+    const void *vulkan_queue;
+    uint32_t vulkan_queue_family_index;
+
+    const void *webgpu_device;
+} OKYgraphicsDesc;
+
+typedef struct OKYrenderTarget {
+    int backend;
+    int width_px;
+    int height_px;
+    int color_format;
+    int depth_format;
+    int sample_count;
+
+    uint32_t gl_framebuffer;
+
+    const void *metal_current_drawable;
+    const void *metal_depth_stencil_texture;
+    const void *metal_msaa_color_texture;
+
+    const void *d3d11_render_view;
+    const void *d3d11_resolve_view;
+    const void *d3d11_depth_stencil_view;
+
+    const void *vulkan_render_image;
+    const void *vulkan_render_view;
+    const void *vulkan_resolve_image;
+    const void *vulkan_resolve_view;
+    const void *vulkan_depth_stencil_image;
+    const void *vulkan_depth_stencil_view;
+    const void *vulkan_render_finished_semaphore;
+    const void *vulkan_present_complete_semaphore;
+
+    const void *webgpu_render_view;
+    const void *webgpu_resolve_view;
+    const void *webgpu_depth_stencil_view;
+} OKYrenderTarget;
+
 /* --- version / abi ----------------------------------------------------- */
 unsigned int okyAbiVersion(void);
 const char *okyVersionString(void);
@@ -112,6 +182,9 @@ void okyEndFrame(OKYcontext *ctx);
 void okyCancelFrame(OKYcontext *ctx);
 
 /* --- WebGPU bridge ----------------------------------------------------- */
+int okySetupGraphics(OKYcontext *ctx, const OKYgraphicsDesc *desc);
+int okySetRenderTarget(OKYcontext *ctx, const OKYrenderTarget *target);
+int okySetupGL(OKYcontext *ctx, int sample_count);
 void okySetupWebGPU(OKYcontext *ctx, const void *wgpu_device,
                     int color_format);
 void okySetWebGPURenderTarget(OKYcontext *ctx, const void *color_texture_view,

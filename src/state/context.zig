@@ -17,6 +17,7 @@ pub const DiagnosticKind = diagnostics.DiagnosticKind;
 pub const Diagnostics = diagnostics.Diagnostics;
 const RenderInterface = @import("../render/interface.zig").RenderInterface;
 const WebGpuRuntime = @import("../render/webgpu_runtime.zig").Runtime;
+const GraphicsRuntime = @import("../render/graphics_runtime.zig").Runtime;
 const backend_selection = @import("../render/backend_selection.zig");
 const BackendKind = backend_selection.BackendKind;
 
@@ -39,6 +40,7 @@ pub const Context = struct {
     fonts: FontStore = .{},
     diagnostics: Diagnostics = .{},
     backend: ?RenderInterface = null,
+    graphics: ?*GraphicsRuntime = null,
     webgpu: ?*WebGpuRuntime = null,
 
     width: f32 = 0,
@@ -100,7 +102,19 @@ pub const Context = struct {
         self.backend = runtime.backend.interface();
     }
 
+    pub fn installGraphics(self: *Context, runtime: *GraphicsRuntime) void {
+        self.clearBackend();
+        self.graphics = runtime;
+        self.backend = runtime.interface();
+    }
+
     pub fn clearBackend(self: *Context) void {
+        if (self.graphics) |runtime| {
+            self.graphics = null;
+            self.backend = null;
+            runtime.deinit();
+            return;
+        }
         if (self.webgpu) |runtime| {
             if (self.backend) |b| {
                 if (@intFromPtr(b.ctx) == @intFromPtr(runtime.backend)) {

@@ -26,6 +26,10 @@ pub fn beginFrame(ctx: *Context, w: f32, h: f32, dpr: f32) void {
 }
 
 pub fn endFrame(ctx: *Context) void {
+    if (ctx.graphics) |runtime| {
+        _ = runtime.submit(ctx.width, ctx.height, ctx.device_pixel_ratio);
+        return;
+    }
     if (ctx.webgpu) |runtime| {
         _ = runtime.submit(ctx.width, ctx.height);
         return;

@@ -22,7 +22,11 @@ const state_ops = @import("ops/state_ops.zig");
 const text_ops = @import("ops/text_ops.zig");
 const TextGlyphPosition = text_ops.TextGlyphPosition;
 const TextRow = text_ops.TextRow;
-const webgpu_runtime = @import("render/webgpu_runtime.zig");
+const graphics_runtime = @import("render/graphics_runtime.zig");
+const GraphicsDesc = graphics_runtime.GraphicsDesc;
+const RenderTarget = graphics_runtime.RenderTarget;
+const GraphicsBackend = graphics_runtime.GraphicsBackend;
+const PixelFormat = graphics_runtime.PixelFormat;
 
 const version_string = "0.0.0";
 const abi_version: u32 = 0;
@@ -63,21 +67,93 @@ export fn okyCancelFrame(ctx: ?*Context) void {
 
 // --- WebGPU bridge ----------------------------------------------------------
 
+export fn okySetupGraphics(ctx: ?*Context, desc: ?*const GraphicsDesc) c_int {
+    const c = ctx orelse return 0;
+    const d = desc orelse return 0;
+    c.clearBackend();
+    const runtime = graphics_runtime.Runtime.create(c.gpa, c.flags, d.*) catch return 0;
+    c.installGraphics(runtime);
+    return 1;
+}
+
+export fn okySetRenderTarget(ctx: ?*Context, target: ?*const RenderTarget) c_int {
+    const c = ctx orelse return 0;
+    const runtime = c.graphics orelse return 0;
+    const t = target orelse return 0;
+    return if (runtime.setRenderTarget(t.*)) 1 else 0;
+}
+
+export fn okySetupGL(ctx: ?*Context, sample_count: c_int) c_int {
+    var desc: GraphicsDesc = .{
+        .backend = @intFromEnum(GraphicsBackend.gl),
+        .color_format = @intFromEnum(PixelFormat.rgba8),
+        .depth_format = @intFromEnum(PixelFormat.depth_stencil),
+        .sample_count = if (sample_count > 0) sample_count else 1,
+        .metal_device = null,
+        .d3d11_device = null,
+        .d3d11_device_context = null,
+        .vulkan_instance = null,
+        .vulkan_physical_device = null,
+        .vulkan_device = null,
+        .vulkan_queue = null,
+        .vulkan_queue_family_index = 0,
+        .webgpu_device = null,
+    };
+    return okySetupGraphics(ctx, &desc);
+}
+
 export fn okySetupWebGPU(ctx: ?*Context, wgpu_device: ?*const anyopaque, color_format: c_int) void {
     const c = ctx orelse return;
     const device = wgpu_device orelse return;
-    const pixel_format = webgpu_runtime.pixelFormatFromInt(color_format) orelse return;
-    c.clearBackend();
-    const runtime = webgpu_runtime.Runtime.create(c.gpa, device, pixel_format) catch return;
-    c.installWebGPU(runtime);
+    var desc: GraphicsDesc = .{
+        .backend = @intFromEnum(GraphicsBackend.webgpu),
+        .color_format = color_format,
+        .depth_format = @intFromEnum(PixelFormat.none),
+        .sample_count = 1,
+        .metal_device = null,
+        .d3d11_device = null,
+        .d3d11_device_context = null,
+        .vulkan_instance = null,
+        .vulkan_physical_device = null,
+        .vulkan_device = null,
+        .vulkan_queue = null,
+        .vulkan_queue_family_index = 0,
+        .webgpu_device = device,
+    };
+    _ = okySetupGraphics(c, &desc);
 }
 
 export fn okySetWebGPURenderTarget(ctx: ?*Context, color_texture_view: ?*const anyopaque, width_px: c_int, height_px: c_int) void {
     const c = ctx orelse return;
-    const runtime = c.webgpu orelse return;
     const view = color_texture_view orelse return;
     if (width_px <= 0 or height_px <= 0) return;
-    runtime.setRenderTarget(view, @intCast(width_px), @intCast(height_px));
+    var target: RenderTarget = .{
+        .backend = @intFromEnum(GraphicsBackend.webgpu),
+        .width_px = width_px,
+        .height_px = height_px,
+        .color_format = @intFromEnum(PixelFormat.none),
+        .depth_format = @intFromEnum(PixelFormat.none),
+        .sample_count = 1,
+        .gl_framebuffer = 0,
+        .metal_current_drawable = null,
+        .metal_depth_stencil_texture = null,
+        .metal_msaa_color_texture = null,
+        .d3d11_render_view = null,
+        .d3d11_resolve_view = null,
+        .d3d11_depth_stencil_view = null,
+        .vulkan_render_image = null,
+        .vulkan_render_view = null,
+        .vulkan_resolve_image = null,
+        .vulkan_resolve_view = null,
+        .vulkan_depth_stencil_image = null,
+        .vulkan_depth_stencil_view = null,
+        .vulkan_render_finished_semaphore = null,
+        .vulkan_present_complete_semaphore = null,
+        .webgpu_render_view = view,
+        .webgpu_resolve_view = null,
+        .webgpu_depth_stencil_view = null,
+    };
+    _ = okySetRenderTarget(c, &target);
 }
 
 // --- state stack -----------------------------------------------------------

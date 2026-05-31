@@ -28,6 +28,7 @@ pub const PassAction = sg.PassAction;
 pub const Swapchain = sg.Swapchain;
 pub const BufferDesc = sg.BufferDesc;
 pub const PipelineDesc = sg.PipelineDesc;
+pub const Backend = sg.Backend;
 
 pub const blit_position_attr = blit_shader.ATTR_blit_position;
 pub const blit_uv_attr = blit_shader.ATTR_blit_uv;
@@ -1056,6 +1057,14 @@ pub fn loadPassAction() PassAction {
     action.colors[0].store_action = .STORE;
     action.stencil.load_action = .LOAD;
     action.stencil.store_action = .STORE;
+    return action;
+}
+
+pub fn loadColorClearStencilPassAction() PassAction {
+    var action = loadPassAction();
+    action.stencil.load_action = .CLEAR;
+    action.stencil.store_action = .STORE;
+    action.stencil.clear_value = 0;
     return action;
 }
 
