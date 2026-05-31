@@ -27,6 +27,9 @@ pub const Strip = strip.Strip;
 pub const TileRef = strip.TileRef;
 pub const FillRule = strip.FillRule;
 
+pub const dense_strip_segment_warning_threshold: usize = 32;
+pub const gpu_fine_upload_warning_bytes: usize = 4 * 1024 * 1024;
+
 pub const Profile = struct {
     bin_ns: u64 = 0,
     coarse_ns: u64 = 0,
@@ -63,6 +66,22 @@ pub const FramePacketStats = struct {
     max_calls_per_tile: usize = 0,
     strip_call_order_breaks: usize = 0,
     strip_spatial_order_breaks: usize = 0,
+    frame_bounds_x0: usize = 0,
+    frame_bounds_y0: usize = 0,
+    frame_bounds_x1: usize = 0,
+    frame_bounds_y1: usize = 0,
+    command_bound_pixels: usize = 0,
+    candidate_tiles_from_bounds: usize = 0,
+    empty_bound_calls: usize = 0,
+    clipped_out_calls: usize = 0,
+    fill_box_candidate_calls: usize = 0,
+    max_segments_per_call: usize = 0,
+    max_tile_refs_per_call: usize = 0,
+    max_strips_per_call: usize = 0,
+    max_alpha_bytes_per_call: usize = 0,
+    dense_strip_warnings: usize = 0,
+    upload_budget_bytes: usize = gpu_fine_upload_warning_bytes,
+    upload_budget_warnings: usize = 0,
 };
 
 const SparseTexture = struct {
@@ -229,6 +248,8 @@ pub const Backend = struct {
         }
 
         const strip_order = stripOrderStats(self.strips.items);
+        const bounds_stats = boundsStats(self.viewport_width, self.viewport_height, self.calls.items, self.segments.items);
+        const pressure = pressureStats(self.calls.items, self.tiles.items, self.strips.items);
 
         const calls_bytes = bytesOf(EncodedCall, self.calls.items.len);
         const segments_bytes = bytesOf(Segment, self.segments.items.len);
@@ -275,9 +296,226 @@ pub const Backend = struct {
             .max_calls_per_tile = strip_order.max_calls_per_tile,
             .strip_call_order_breaks = strip_order.call_order_breaks,
             .strip_spatial_order_breaks = strip_order.spatial_order_breaks,
+            .frame_bounds_x0 = bounds_stats.frame_bounds_x0,
+            .frame_bounds_y0 = bounds_stats.frame_bounds_y0,
+            .frame_bounds_x1 = bounds_stats.frame_bounds_x1,
+            .frame_bounds_y1 = bounds_stats.frame_bounds_y1,
+            .command_bound_pixels = bounds_stats.command_bound_pixels,
+            .candidate_tiles_from_bounds = bounds_stats.candidate_tiles_from_bounds,
+            .empty_bound_calls = bounds_stats.empty_bound_calls,
+            .clipped_out_calls = bounds_stats.clipped_out_calls,
+            .fill_box_candidate_calls = bounds_stats.fill_box_candidate_calls,
+            .max_segments_per_call = pressure.max_segments_per_call,
+            .max_tile_refs_per_call = pressure.max_tile_refs_per_call,
+            .max_strips_per_call = pressure.max_strips_per_call,
+            .max_alpha_bytes_per_call = pressure.max_alpha_bytes_per_call,
+            .dense_strip_warnings = pressure.dense_strip_warnings,
+            .upload_budget_warnings = @intFromBool((calls_bytes + segments_bytes + strips_bytes + strip_indices_bytes) > gpu_fine_upload_warning_bytes),
         };
     }
 };
+
+const ClippedBounds = struct {
+    x0: usize = 0,
+    y0: usize = 0,
+    x1: usize = 0,
+    y1: usize = 0,
+    empty: bool = true,
+};
+
+const BoundsStats = struct {
+    frame_bounds_x0: usize = 0,
+    frame_bounds_y0: usize = 0,
+    frame_bounds_x1: usize = 0,
+    frame_bounds_y1: usize = 0,
+    command_bound_pixels: usize = 0,
+    candidate_tiles_from_bounds: usize = 0,
+    empty_bound_calls: usize = 0,
+    clipped_out_calls: usize = 0,
+    fill_box_candidate_calls: usize = 0,
+};
+
+fn boundsStats(viewport_width: f32, viewport_height: f32, calls: []const EncodedCall, segments: []const Segment) BoundsStats {
+    const width = viewportPixelExtent(viewport_width);
+    const height = viewportPixelExtent(viewport_height);
+    var stats: BoundsStats = .{};
+    var has_frame_bounds = false;
+
+    for (calls) |call| {
+        const bounds = callBounds(call, segments);
+        if (!validBounds(bounds)) {
+            stats.empty_bound_calls += 1;
+            continue;
+        }
+
+        const clipped = clipBounds(bounds, width, height);
+        if (clipped.empty) {
+            stats.clipped_out_calls += 1;
+        } else {
+            stats.command_bound_pixels += boundPixels(clipped);
+            stats.candidate_tiles_from_bounds += candidateTiles(clipped);
+            if (!has_frame_bounds) {
+                stats.frame_bounds_x0 = clipped.x0;
+                stats.frame_bounds_y0 = clipped.y0;
+                stats.frame_bounds_x1 = clipped.x1;
+                stats.frame_bounds_y1 = clipped.y1;
+                has_frame_bounds = true;
+            } else {
+                stats.frame_bounds_x0 = @min(stats.frame_bounds_x0, clipped.x0);
+                stats.frame_bounds_y0 = @min(stats.frame_bounds_y0, clipped.y0);
+                stats.frame_bounds_x1 = @max(stats.frame_bounds_x1, clipped.x1);
+                stats.frame_bounds_y1 = @max(stats.frame_bounds_y1, clipped.y1);
+            }
+        }
+
+        if (fillBoxCandidate(call, segments)) stats.fill_box_candidate_calls += 1;
+    }
+
+    return stats;
+}
+
+fn viewportPixelExtent(v: f32) usize {
+    if (v <= 0) return 0;
+    return @intFromFloat(@ceil(v));
+}
+
+fn clipBounds(bounds: [4]f32, width: usize, height: usize) ClippedBounds {
+    if (width == 0 or height == 0) return .{};
+    const width_f: f32 = @floatFromInt(width);
+    const height_f: f32 = @floatFromInt(height);
+    const x0_f = std.math.clamp(@floor(bounds[0]), 0, width_f);
+    const y0_f = std.math.clamp(@floor(bounds[1]), 0, height_f);
+    const x1_f = std.math.clamp(@ceil(bounds[2]), 0, width_f);
+    const y1_f = std.math.clamp(@ceil(bounds[3]), 0, height_f);
+    if (x0_f >= x1_f or y0_f >= y1_f) return .{};
+    return .{
+        .x0 = @intFromFloat(x0_f),
+        .y0 = @intFromFloat(y0_f),
+        .x1 = @intFromFloat(x1_f),
+        .y1 = @intFromFloat(y1_f),
+        .empty = false,
+    };
+}
+
+fn boundPixels(bounds: ClippedBounds) usize {
+    if (bounds.empty) return 0;
+    return (bounds.x1 - bounds.x0) * (bounds.y1 - bounds.y0);
+}
+
+fn candidateTiles(bounds: ClippedBounds) usize {
+    if (bounds.empty) return 0;
+    const x0: i32 = strip.tileCoord(@floatFromInt(bounds.x0));
+    const y0: i32 = strip.tileCoord(@floatFromInt(bounds.y0));
+    const x1: i32 = strip.tileCoord(@as(f32, @floatFromInt(bounds.x1)) - 0.001);
+    const y1: i32 = strip.tileCoord(@as(f32, @floatFromInt(bounds.y1)) - 0.001);
+    return @intCast((x1 - x0 + 1) * (y1 - y0 + 1));
+}
+
+fn callBounds(call: EncodedCall, segments: []const Segment) [4]f32 {
+    if (validBounds(call.bounds)) return call.bounds;
+
+    var bounds = [4]f32{ 1e6, 1e6, -1e6, -1e6 };
+    const start: usize = @intCast(call.segments.start);
+    const count: usize = @intCast(call.segments.count);
+    for (segments[start..][0..count]) |seg| {
+        bounds[0] = @min(bounds[0], @min(seg.x0, seg.x1));
+        bounds[1] = @min(bounds[1], @min(seg.y0, seg.y1));
+        bounds[2] = @max(bounds[2], @max(seg.x0, seg.x1));
+        bounds[3] = @max(bounds[3], @max(seg.y0, seg.y1));
+    }
+    return bounds;
+}
+
+fn validBounds(bounds: [4]f32) bool {
+    return bounds[0] < bounds[2] and bounds[1] < bounds[3];
+}
+
+fn fillBoxCandidate(call: EncodedCall, segments: []const Segment) bool {
+    if (call.kind != .fill or !call.convex or call.segments.count != 4) return false;
+    if (call.paint.image != 0 or !scissorDisabled(&call.scissor)) return false;
+    if (!sameColor(call.paint.inner_color, call.paint.outer_color)) return false;
+
+    const bounds = callBounds(call, segments);
+    if (!validBounds(bounds) or !alignedBounds(bounds)) return false;
+
+    const start: usize = @intCast(call.segments.start);
+    var horizontal: usize = 0;
+    var vertical: usize = 0;
+    for (segments[start..][0..4]) |seg| {
+        if (seg.y0 == seg.y1) {
+            if (!atRectY(seg.y0, bounds) or @min(seg.x0, seg.x1) != bounds[0] or @max(seg.x0, seg.x1) != bounds[2]) return false;
+            horizontal += 1;
+        } else if (seg.x0 == seg.x1) {
+            if (!atRectX(seg.x0, bounds) or @min(seg.y0, seg.y1) != bounds[1] or @max(seg.y0, seg.y1) != bounds[3]) return false;
+            vertical += 1;
+        } else {
+            return false;
+        }
+    }
+    return horizontal == 2 and vertical == 2;
+}
+
+fn alignedBounds(bounds: [4]f32) bool {
+    return isInteger(bounds[0]) and isInteger(bounds[1]) and isInteger(bounds[2]) and isInteger(bounds[3]);
+}
+
+fn isInteger(value: f32) bool {
+    return value == @floor(value);
+}
+
+fn atRectX(x: f32, bounds: [4]f32) bool {
+    return x == bounds[0] or x == bounds[2];
+}
+
+fn atRectY(y: f32, bounds: [4]f32) bool {
+    return y == bounds[1] or y == bounds[3];
+}
+
+fn sameColor(a: color.Color, b: color.Color) bool {
+    return a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a;
+}
+
+fn scissorDisabled(scissor: *const Scissor) bool {
+    return scissor.extent[0] < 0 or scissor.extent[1] < 0;
+}
+
+const PressureStats = struct {
+    max_segments_per_call: usize = 0,
+    max_tile_refs_per_call: usize = 0,
+    max_strips_per_call: usize = 0,
+    max_alpha_bytes_per_call: usize = 0,
+    dense_strip_warnings: usize = 0,
+};
+
+fn pressureStats(calls: []const EncodedCall, tiles: []const TileRef, strips: []const Strip) PressureStats {
+    var stats: PressureStats = .{};
+    for (calls, 0..) |call, call_index| {
+        stats.max_segments_per_call = @max(stats.max_segments_per_call, call.segments.count);
+        stats.max_tile_refs_per_call = @max(stats.max_tile_refs_per_call, countTilesForCall(tiles, call_index));
+
+        var strip_count: usize = 0;
+        var alpha_bytes: usize = 0;
+        for (strips) |s| {
+            if (s.call_index != call_index) continue;
+            strip_count += 1;
+            alpha_bytes += s.alpha.count;
+            if (s.segment_indices.count > dense_strip_segment_warning_threshold) {
+                stats.dense_strip_warnings += 1;
+            }
+        }
+        stats.max_strips_per_call = @max(stats.max_strips_per_call, strip_count);
+        stats.max_alpha_bytes_per_call = @max(stats.max_alpha_bytes_per_call, alpha_bytes);
+    }
+    return stats;
+}
+
+fn countTilesForCall(tiles: []const TileRef, call_index: usize) usize {
+    var count: usize = 0;
+    for (tiles) |tile| {
+        if (tile.call_index == call_index) count += 1;
+    }
+    return count;
+}
 
 const StripOrderStats = struct {
     max_strip_segments: usize = 0,

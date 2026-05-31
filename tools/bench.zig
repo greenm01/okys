@@ -88,6 +88,22 @@ const ProfileStats = struct {
     max_calls_per_tile: usize = 0,
     strip_call_order_breaks: usize = 0,
     strip_spatial_order_breaks: usize = 0,
+    frame_bounds_x0: usize = 0,
+    frame_bounds_y0: usize = 0,
+    frame_bounds_x1: usize = 0,
+    frame_bounds_y1: usize = 0,
+    command_bound_pixels: usize = 0,
+    candidate_tiles_from_bounds: usize = 0,
+    empty_bound_calls: usize = 0,
+    clipped_out_calls: usize = 0,
+    fill_box_candidate_calls: usize = 0,
+    max_segments_per_call: usize = 0,
+    max_tile_refs_per_call: usize = 0,
+    max_strips_per_call: usize = 0,
+    max_alpha_bytes_per_call: usize = 0,
+    dense_strip_warnings: usize = 0,
+    upload_budget_bytes: usize = 0,
+    upload_budget_warnings: usize = 0,
     frontend_frame_ns: u64 = 0,
     stroke_outline_ns: u64 = 0,
     stroke_outline_builds: usize = 0,
@@ -357,6 +373,22 @@ fn profileStats(profile: SparseProfile) ProfileStats {
         .max_calls_per_tile = profile.frame_packet.max_calls_per_tile,
         .strip_call_order_breaks = profile.frame_packet.strip_call_order_breaks,
         .strip_spatial_order_breaks = profile.frame_packet.strip_spatial_order_breaks,
+        .frame_bounds_x0 = profile.frame_packet.frame_bounds_x0,
+        .frame_bounds_y0 = profile.frame_packet.frame_bounds_y0,
+        .frame_bounds_x1 = profile.frame_packet.frame_bounds_x1,
+        .frame_bounds_y1 = profile.frame_packet.frame_bounds_y1,
+        .command_bound_pixels = profile.frame_packet.command_bound_pixels,
+        .candidate_tiles_from_bounds = profile.frame_packet.candidate_tiles_from_bounds,
+        .empty_bound_calls = profile.frame_packet.empty_bound_calls,
+        .clipped_out_calls = profile.frame_packet.clipped_out_calls,
+        .fill_box_candidate_calls = profile.frame_packet.fill_box_candidate_calls,
+        .max_segments_per_call = profile.frame_packet.max_segments_per_call,
+        .max_tile_refs_per_call = profile.frame_packet.max_tile_refs_per_call,
+        .max_strips_per_call = profile.frame_packet.max_strips_per_call,
+        .max_alpha_bytes_per_call = profile.frame_packet.max_alpha_bytes_per_call,
+        .dense_strip_warnings = profile.frame_packet.dense_strip_warnings,
+        .upload_budget_bytes = profile.frame_packet.upload_budget_bytes,
+        .upload_budget_warnings = profile.frame_packet.upload_budget_warnings,
     };
 }
 
@@ -439,6 +471,22 @@ fn averageProfile(total: ProfileStats, last: ProfileStats) ProfileStats {
         .max_calls_per_tile = last.max_calls_per_tile,
         .strip_call_order_breaks = last.strip_call_order_breaks,
         .strip_spatial_order_breaks = last.strip_spatial_order_breaks,
+        .frame_bounds_x0 = last.frame_bounds_x0,
+        .frame_bounds_y0 = last.frame_bounds_y0,
+        .frame_bounds_x1 = last.frame_bounds_x1,
+        .frame_bounds_y1 = last.frame_bounds_y1,
+        .command_bound_pixels = last.command_bound_pixels,
+        .candidate_tiles_from_bounds = last.candidate_tiles_from_bounds,
+        .empty_bound_calls = last.empty_bound_calls,
+        .clipped_out_calls = last.clipped_out_calls,
+        .fill_box_candidate_calls = last.fill_box_candidate_calls,
+        .max_segments_per_call = last.max_segments_per_call,
+        .max_tile_refs_per_call = last.max_tile_refs_per_call,
+        .max_strips_per_call = last.max_strips_per_call,
+        .max_alpha_bytes_per_call = last.max_alpha_bytes_per_call,
+        .dense_strip_warnings = last.dense_strip_warnings,
+        .upload_budget_bytes = last.upload_budget_bytes,
+        .upload_budget_warnings = last.upload_budget_warnings,
     };
 }
 
@@ -447,12 +495,12 @@ fn bytesOf(comptime T: type, count: usize) usize {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tmulti_call_tiles\tmax_calls_per_tile\tstrip_call_order_breaks\tstrip_spatial_order_breaks\tfrontend_frame_ns\tstroke_outline_ns\tstroke_outline_builds\tstroke_calls\tstroke_source_paths\tstroke_source_points\tstroke_source_open_paths\tstroke_source_closed_paths\tstroke_outline_paths\tstroke_outline_points\tmax_stroke_outline_expansion_pct\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tmulti_call_tiles\tmax_calls_per_tile\tstrip_call_order_breaks\tstrip_spatial_order_breaks\tfrontend_frame_ns\tstroke_outline_ns\tstroke_outline_builds\tstroke_calls\tstroke_source_paths\tstroke_source_points\tstroke_source_open_paths\tstroke_source_closed_paths\tstroke_outline_paths\tstroke_outline_points\tmax_stroke_outline_expansion_pct\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\tframe_bounds_x0\tframe_bounds_y0\tframe_bounds_x1\tframe_bounds_y1\tcommand_bound_pixels\tcandidate_tiles_from_bounds\tempty_bound_calls\tclipped_out_calls\tfill_box_candidate_calls\tmax_segments_per_call\tmax_tile_refs_per_call\tmax_strips_per_call\tmax_alpha_bytes_per_call\tdense_strip_warnings\tupload_budget_bytes\tupload_budget_warnings\n");
 }
 
 fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: []const u8, result: Result) void {
     _ = std.c.printf(
-        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(backend_name.len)),
@@ -517,6 +565,22 @@ fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: [
         u64ForPrint(result.profile.alpha_fill_ops),
         u64ForPrint(result.profile.fill_pixels),
         u64ForPrint(result.profile.alpha_fill_pixels),
+        u64ForPrint(result.profile.frame_bounds_x0),
+        u64ForPrint(result.profile.frame_bounds_y0),
+        u64ForPrint(result.profile.frame_bounds_x1),
+        u64ForPrint(result.profile.frame_bounds_y1),
+        u64ForPrint(result.profile.command_bound_pixels),
+        u64ForPrint(result.profile.candidate_tiles_from_bounds),
+        u64ForPrint(result.profile.empty_bound_calls),
+        u64ForPrint(result.profile.clipped_out_calls),
+        u64ForPrint(result.profile.fill_box_candidate_calls),
+        u64ForPrint(result.profile.max_segments_per_call),
+        u64ForPrint(result.profile.max_tile_refs_per_call),
+        u64ForPrint(result.profile.max_strips_per_call),
+        u64ForPrint(result.profile.max_alpha_bytes_per_call),
+        u64ForPrint(result.profile.dense_strip_warnings),
+        u64ForPrint(result.profile.upload_budget_bytes),
+        u64ForPrint(result.profile.upload_budget_warnings),
     );
 }
 

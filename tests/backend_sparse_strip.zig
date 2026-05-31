@@ -133,6 +133,74 @@ test "sparse profiled build reports fine-stage work counters" {
     try testing.expect(packet.gpu_fine_upload_bytes > 0);
     try testing.expect(packet.packet_capacity_bytes >= packet.frame_packet_bytes);
     try testing.expect(packet.max_strip_segments > 0);
+    try testing.expectEqual(@as(usize, 4), packet.frame_bounds_x0);
+    try testing.expectEqual(@as(usize, 4), packet.frame_bounds_y0);
+    try testing.expectEqual(@as(usize, 20), packet.frame_bounds_x1);
+    try testing.expectEqual(@as(usize, 20), packet.frame_bounds_y1);
+    try testing.expectEqual(@as(usize, 256), packet.command_bound_pixels);
+    try testing.expectEqual(@as(usize, 16), packet.candidate_tiles_from_bounds);
+    try testing.expectEqual(@as(usize, 0), packet.empty_bound_calls);
+    try testing.expectEqual(@as(usize, 0), packet.clipped_out_calls);
+    try testing.expectEqual(@as(usize, 1), packet.fill_box_candidate_calls);
+    try testing.expectEqual(@as(usize, 4), packet.max_segments_per_call);
+    try testing.expectEqual(@as(usize, 4), packet.max_tile_refs_per_call);
+    try testing.expectEqual(@as(usize, 4), packet.max_strips_per_call);
+    try testing.expectEqual(@as(usize, 64), packet.max_alpha_bytes_per_call);
+    try testing.expectEqual(@as(usize, 0), packet.dense_strip_warnings);
+    try testing.expectEqual(sparse.gpu_fine_upload_warning_bytes, packet.upload_budget_bytes);
+    try testing.expectEqual(@as(usize, 0), packet.upload_budget_warnings);
+}
+
+test "sparse frame packet bounds diagnostics track clipped out calls" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, -20, -20, -10, -10);
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
+
+    const packet = profile.frame_packet;
+    try testing.expectEqual(@as(usize, 1), packet.calls);
+    try testing.expectEqual(@as(usize, 0), packet.tile_refs);
+    try testing.expectEqual(@as(usize, 0), packet.strips);
+    try testing.expectEqual(@as(usize, 0), packet.command_bound_pixels);
+    try testing.expectEqual(@as(usize, 0), packet.candidate_tiles_from_bounds);
+    try testing.expectEqual(@as(usize, 0), packet.empty_bound_calls);
+    try testing.expectEqual(@as(usize, 1), packet.clipped_out_calls);
+    try testing.expectEqual(@as(usize, 0), packet.frame_bounds_x0);
+    try testing.expectEqual(@as(usize, 0), packet.frame_bounds_y0);
+    try testing.expectEqual(@as(usize, 0), packet.frame_bounds_x1);
+    try testing.expectEqual(@as(usize, 0), packet.frame_bounds_y1);
+}
+
+test "sparse frame packet pressure diagnostics flag dense strips" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    var points: [64]Point = undefined;
+    for (&points, 0..) |*point, i| {
+        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(points.len - 1));
+        point.* = .{
+            .x = 5 + t * 2,
+            .y = if (i % 2 == 0) 5 else 7,
+        };
+    }
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = points.len, .closed = true, .convex = false }};
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 5, 5, 7, 7 }, &paths, &points);
+
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
+
+    const packet = profile.frame_packet;
+    try testing.expect(packet.max_segments_per_call > sparse.dense_strip_segment_warning_threshold);
+    try testing.expect(packet.max_strip_segments > sparse.dense_strip_segment_warning_threshold);
+    try testing.expect(packet.dense_strip_warnings > 0);
+    try testing.expectEqual(@as(usize, 1), packet.candidate_tiles_from_bounds);
 }
 
 test "sparse fine stage uses analytic subpixel coverage" {
