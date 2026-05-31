@@ -8,6 +8,7 @@ const State = draw_state.State;
 const CommandBuffer = @import("commands.zig").CommandBuffer;
 const PathCache = @import("path_cache.zig").PathCache;
 const FrameArena = @import("arena.zig").FrameArena;
+const FrameProfile = @import("frame_profile.zig").FrameProfile;
 const Textures = @import("textures.zig").Textures;
 const RenderInterface = @import("../render/interface.zig").RenderInterface;
 const backend_selection = @import("../render/backend_selection.zig");
@@ -25,6 +26,7 @@ pub const Context = struct {
     cache: PathCache = .{},
     stroke_outline: PathCache = .{},
     frame_arena: FrameArena,
+    frame_profile: FrameProfile = .{},
     textures: Textures,
     backend: ?RenderInterface = null,
 

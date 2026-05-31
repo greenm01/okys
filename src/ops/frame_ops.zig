@@ -19,6 +19,7 @@ pub fn beginFrame(ctx: *Context, w: f32, h: f32, dpr: f32) void {
     ctx.cache.clear();
     ctx.stroke_outline.clear();
     ctx.frame_arena.reset();
+    ctx.frame_profile.resetFrame();
 
     if (ctx.backend) |b| b.viewport(b.ctx, w, h, ratio);
 }

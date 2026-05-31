@@ -9,6 +9,7 @@ const backend_stencil_golden_tests = @import("backend_stencil_golden.zig");
 const backend_stencil_replay_tests = @import("backend_stencil_replay.zig");
 const backend_stencil_tests = @import("backend_stencil.zig");
 const frame_capture_tests = @import("frame_capture.zig");
+const frame_profile_tests = @import("frame_profile.zig");
 const image_ops_tests = @import("image_ops.zig");
 const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
@@ -35,6 +36,7 @@ test "all production modules analyze" {
     _ = okys.state.commands;
     _ = okys.state.path_cache;
     _ = okys.state.draw_state;
+    _ = okys.state.frame_profile;
     _ = okys.state.textures;
     _ = okys.state.context;
     _ = okys.ops.frame;
@@ -68,6 +70,7 @@ test "all production modules analyze" {
     _ = backend_stencil_replay_tests;
     _ = backend_stencil_tests;
     _ = frame_capture_tests;
+    _ = frame_profile_tests;
     _ = image_ops_tests;
     _ = mock_backend;
     _ = sokol_device_tests;

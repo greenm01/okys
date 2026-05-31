@@ -5,6 +5,7 @@ const color = okys.types.color;
 const ImageId = okys.types.image.ImageId;
 const CapturedFrame = okys.render.frame_capture.CapturedFrame;
 const Context = okys.state.context.Context;
+const FrameProfile = okys.state.frame_profile.FrameProfile;
 const SparseBackend = okys.systems.backend_sparse_strip.Backend;
 const StencilBackend = okys.systems.backend_stencil.Backend;
 const SparseCall = okys.systems.backend_sparse_strip.EncodedCall;
@@ -37,6 +38,7 @@ const checker_square = 4;
 const Scene = struct {
     name: []const u8,
     frame: *const CapturedFrame,
+    draw: *const fn (*Context, ImageId) void,
 };
 
 const Stats = struct {
@@ -82,6 +84,17 @@ const ProfileStats = struct {
     surface_bytes: usize = 0,
     texture_bytes: usize = 0,
     max_strip_segments: usize = 0,
+    frontend_frame_ns: u64 = 0,
+    stroke_outline_ns: u64 = 0,
+    stroke_outline_builds: usize = 0,
+    stroke_calls: usize = 0,
+    stroke_source_paths: usize = 0,
+    stroke_source_points: usize = 0,
+    stroke_source_open_paths: usize = 0,
+    stroke_source_closed_paths: usize = 0,
+    stroke_outline_paths: usize = 0,
+    stroke_outline_points: usize = 0,
+    max_stroke_outline_expansion_pct: usize = 0,
 };
 
 const Result = struct {
@@ -104,14 +117,17 @@ pub fn main() !void {
     defer scissors.deinit();
 
     const scenes = [_]Scene{
-        .{ .name = "mixed_demo", .frame = &mixed },
-        .{ .name = "rounded_rect_grid", .frame = &rounded_grid },
-        .{ .name = "arcs_icons", .frame = &arcs_icons },
-        .{ .name = "nested_scissors", .frame = &scissors },
+        .{ .name = "mixed_demo", .frame = &mixed, .draw = drawMixedScene },
+        .{ .name = "rounded_rect_grid", .frame = &rounded_grid, .draw = drawRoundedGridScene },
+        .{ .name = "arcs_icons", .frame = &arcs_icons, .draw = drawArcsIconsScene },
+        .{ .name = "nested_scissors", .frame = &scissors, .draw = drawScissorScene },
     };
 
     printHeader();
     for (scenes) |scene| {
+        const frontend = try benchFrontend(gpa, scene.draw);
+        printResult(scene.name, "frontend", "frame_build_capture", frontend);
+
         const stencil = try benchStencil(gpa, scene.frame);
         printResult(scene.name, "stencil_cover", "cpu_build_only", stencil);
 
@@ -133,6 +149,45 @@ fn captureScene(gpa: std.mem.Allocator, draw: *const fn (*Context, ImageId) void
     draw(ctx, image_id);
     frame_ops.cancelFrame(ctx);
     return frame;
+}
+
+fn benchFrontend(gpa: std.mem.Allocator, draw: *const fn (*Context, ImageId) void) !Result {
+    var frame = CapturedFrame.init(gpa);
+    defer frame.deinit();
+    const ctx = try Context.create(gpa, OKY_ANTIALIAS | OKY_STENCIL_STROKES);
+    defer ctx.destroy();
+    ctx.installBackend(frame.interface());
+    ctx.frame_profile.enabled = true;
+
+    var frame_total: u128 = 0;
+    var profile_total: ProfileStats = .{};
+    var profile_last: ProfileStats = .{};
+    const fake_image: ImageId = @enumFromInt(1);
+
+    var i: usize = 0;
+    while (i < warmup_iterations + measured_iterations) : (i += 1) {
+        frame.clear();
+
+        const frame_start = nowNs();
+        frame_ops.beginFrame(ctx, scene_width, scene_height, 1);
+        draw(ctx, fake_image);
+        frame_ops.cancelFrame(ctx);
+        const frame_ns = nowNs() - frame_start;
+
+        if (i >= warmup_iterations) {
+            frame_total += frame_ns;
+            const stats = frontendProfileStats(frame_ns, ctx.frame_profile);
+            addProfileDurations(&profile_total, stats);
+            profile_last = stats;
+        }
+    }
+
+    return .{
+        .replay_ns = 0,
+        .build_ns = average(frame_total),
+        .stats = .{},
+        .profile = averageProfile(profile_total, profile_last),
+    };
 }
 
 fn benchStencil(gpa: std.mem.Allocator, frame: *const CapturedFrame) !Result {
@@ -297,7 +352,25 @@ fn profileStats(profile: SparseProfile) ProfileStats {
     };
 }
 
+fn frontendProfileStats(frame_ns: u64, profile: FrameProfile) ProfileStats {
+    return .{
+        .frontend_frame_ns = frame_ns,
+        .stroke_outline_ns = profile.stroke_outline_ns,
+        .stroke_outline_builds = profile.stroke_outline_builds,
+        .stroke_calls = profile.stroke_calls,
+        .stroke_source_paths = profile.stroke_source_paths,
+        .stroke_source_points = profile.stroke_source_points,
+        .stroke_source_open_paths = profile.stroke_source_open_paths,
+        .stroke_source_closed_paths = profile.stroke_source_closed_paths,
+        .stroke_outline_paths = profile.stroke_outline_paths,
+        .stroke_outline_points = profile.stroke_outline_points,
+        .max_stroke_outline_expansion_pct = profile.max_stroke_outline_expansion_pct,
+    };
+}
+
 fn addProfileDurations(total: *ProfileStats, profile: ProfileStats) void {
+    total.frontend_frame_ns += profile.frontend_frame_ns;
+    total.stroke_outline_ns += profile.stroke_outline_ns;
     total.bin_ns += profile.bin_ns;
     total.coarse_ns += profile.coarse_ns;
     total.texture_views_ns += profile.texture_views_ns;
@@ -312,6 +385,17 @@ fn addProfileDurations(total: *ProfileStats, profile: ProfileStats) void {
 
 fn averageProfile(total: ProfileStats, last: ProfileStats) ProfileStats {
     return .{
+        .frontend_frame_ns = average(total.frontend_frame_ns),
+        .stroke_outline_ns = average(total.stroke_outline_ns),
+        .stroke_outline_builds = last.stroke_outline_builds,
+        .stroke_calls = last.stroke_calls,
+        .stroke_source_paths = last.stroke_source_paths,
+        .stroke_source_points = last.stroke_source_points,
+        .stroke_source_open_paths = last.stroke_source_open_paths,
+        .stroke_source_closed_paths = last.stroke_source_closed_paths,
+        .stroke_outline_paths = last.stroke_outline_paths,
+        .stroke_outline_points = last.stroke_outline_points,
+        .max_stroke_outline_expansion_pct = last.max_stroke_outline_expansion_pct,
         .bin_ns = average(total.bin_ns),
         .coarse_ns = average(total.coarse_ns),
         .texture_views_ns = average(total.texture_views_ns),
@@ -351,12 +435,12 @@ fn bytesOf(comptime T: type, count: usize) usize {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tfrontend_frame_ns\tstroke_outline_ns\tstroke_outline_builds\tstroke_calls\tstroke_source_paths\tstroke_source_points\tstroke_source_open_paths\tstroke_source_closed_paths\tstroke_outline_paths\tstroke_outline_points\tmax_stroke_outline_expansion_pct\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
 }
 
 fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: []const u8, result: Result) void {
     _ = std.c.printf(
-        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(backend_name.len)),
@@ -383,6 +467,17 @@ fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: [
         u64ForPrint(result.profile.surface_bytes),
         u64ForPrint(result.profile.texture_bytes),
         u64ForPrint(result.profile.max_strip_segments),
+        u64ForPrint(result.profile.frontend_frame_ns),
+        u64ForPrint(result.profile.stroke_outline_ns),
+        u64ForPrint(result.profile.stroke_outline_builds),
+        u64ForPrint(result.profile.stroke_calls),
+        u64ForPrint(result.profile.stroke_source_paths),
+        u64ForPrint(result.profile.stroke_source_points),
+        u64ForPrint(result.profile.stroke_source_open_paths),
+        u64ForPrint(result.profile.stroke_source_closed_paths),
+        u64ForPrint(result.profile.stroke_outline_paths),
+        u64ForPrint(result.profile.stroke_outline_points),
+        u64ForPrint(result.profile.max_stroke_outline_expansion_pct),
         u64ForPrint(result.profile.bin_ns),
         u64ForPrint(result.profile.coarse_ns),
         u64ForPrint(result.profile.texture_views_ns),

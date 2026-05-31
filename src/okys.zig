@@ -14,6 +14,7 @@ pub const state = struct {
     pub const commands = @import("state/commands.zig");
     pub const path_cache = @import("state/path_cache.zig");
     pub const draw_state = @import("state/draw_state.zig");
+    pub const frame_profile = @import("state/frame_profile.zig");
     pub const textures = @import("state/textures.zig");
     pub const context = @import("state/context.zig");
 };

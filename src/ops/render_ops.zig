@@ -2,6 +2,7 @@
 //! the active render backend.
 
 const Context = @import("../state/context.zig").Context;
+const frame_profile = @import("../state/frame_profile.zig");
 const flatten = @import("../systems/flatten.zig");
 const stroke_outline = @import("../systems/stroke.zig");
 
@@ -42,12 +43,24 @@ pub fn stroke(ctx: *Context) void {
         width = fringe;
     }
 
+    const profile_enabled = ctx.frame_profile.enabled;
+    const profile_start = if (profile_enabled) frame_profile.nowNs() else 0;
     stroke_outline.buildOutlineWithWidth(ctx, width);
+    if (profile_enabled) {
+        ctx.frame_profile.recordStrokeOutline(
+            frame_profile.nowNs() - profile_start,
+            ctx.cache.paths.items,
+            ctx.cache.points.items.len,
+            ctx.stroke_outline.paths.items.len,
+            ctx.stroke_outline.points.items.len,
+        );
+    }
     if (ctx.stroke_outline.paths.items.len == 0 or ctx.stroke_outline.points.items.len == 0) return;
 
     const backend = ctx.backend orelse return;
     const state = ctx.state();
     const scissor = state.scissor;
+    ctx.frame_profile.recordStrokeCall();
 
     backend.stroke(
         backend.ctx,
