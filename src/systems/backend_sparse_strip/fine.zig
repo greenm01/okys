@@ -1,8 +1,26 @@
 //! Scalar fine stage for the first sparse-strip proof.
 
 const std = @import("std");
+const color = @import("../../types/color.zig");
+const image = @import("../../types/image.zig");
 const encode = @import("encode.zig");
 const strip = @import("strip.zig");
+const xforms = @import("../transform.zig");
+
+pub const Texture = struct {
+    id: image.ImageId,
+    width: u32,
+    height: u32,
+    format: image.TexFormat,
+    pixels: []const u8,
+};
+
+const ColorF = struct {
+    r: f32 = 0,
+    g: f32 = 0,
+    b: f32 = 0,
+    a: f32 = 0,
+};
 
 pub fn build(
     gpa: std.mem.Allocator,
@@ -12,6 +30,7 @@ pub fn build(
     calls: []const encode.EncodedCall,
     segments: []const encode.Segment,
     strip_segment_indices: []const u32,
+    textures: []const Texture,
     strips: *std.ArrayList(strip.Strip),
     alphas: *std.ArrayList(u8),
     surface: *std.ArrayList(u8),
@@ -38,8 +57,9 @@ pub fn build(
                 );
                 try alphas.append(gpa, alpha);
                 if (s.call_index < calls.len) {
-                    compositeSolid(
+                    compositePaint(
                         calls[s.call_index],
+                        textures,
                         alpha,
                         s.x + local_x,
                         s.y + local_y,
@@ -195,8 +215,9 @@ fn areaToAlpha(fill_rule: strip.FillRule, area: f32) u8 {
     return normToU8(coverage);
 }
 
-fn compositeSolid(
+fn compositePaint(
     call: encode.EncodedCall,
+    textures: []const Texture,
     coverage_alpha: u8,
     x: u16,
     y: u16,
@@ -204,15 +225,19 @@ fn compositeSolid(
     height: u32,
     surface: []u8,
 ) void {
-    if (coverage_alpha == 0 or !isSolidPaint(call)) return;
+    if (coverage_alpha == 0) return;
     if (x >= width or y >= height) return;
 
-    const coverage = u8ToNorm(coverage_alpha);
-    const c = call.paint.inner_color;
-    const src_a = c.a * coverage;
-    const src_r = c.r * src_a;
-    const src_g = c.g * src_a;
-    const src_b = c.b * src_a;
+    const px = @as(f32, @floatFromInt(x)) + 0.5;
+    const py = @as(f32, @floatFromInt(y)) + 0.5;
+    const mask = u8ToNorm(coverage_alpha) * scissorMask(&call.scissor, px, py);
+    if (mask <= 0) return;
+
+    const c = resolvePaint(call, textures, px, py);
+    const src_a = c.a * mask;
+    const src_r = c.r * mask;
+    const src_g = c.g * mask;
+    const src_b = c.b * mask;
 
     const index = (@as(usize, y) * @as(usize, width) + x) * 4;
     const dst_r = u8ToNorm(surface[index + 0]);
@@ -227,13 +252,85 @@ fn compositeSolid(
     surface[index + 3] = normToU8(src_a + dst_a * inv_a);
 }
 
-fn isSolidPaint(call: encode.EncodedCall) bool {
+fn resolvePaint(call: encode.EncodedCall, textures: []const Texture, px: f32, py: f32) ColorF {
     const paint = call.paint;
-    return paint.image == 0 and
-        paint.inner_color.r == paint.outer_color.r and
-        paint.inner_color.g == paint.outer_color.g and
-        paint.inner_color.b == paint.outer_color.b and
-        paint.inner_color.a == paint.outer_color.a;
+    if (paint.image > 0) {
+        if (findTexture(textures, @enumFromInt(@as(u32, @intCast(paint.image))))) |texture| {
+            return sampleImagePattern(&paint, texture, px, py);
+        }
+        return .{};
+    }
+
+    const inv = xforms.inverse(&paint.xform) orelse xforms.identity();
+    const pt = xforms.point(&inv, px, py);
+    const feather = @max(paint.feather, 0.0001);
+    const d = std.math.clamp((sdroundrect(pt, paint.extent, paint.radius) + feather * 0.5) / feather, 0, 1);
+    return mixPremul(paint.inner_color, paint.outer_color, d);
+}
+
+fn sampleImagePattern(paint: *const color.Paint, texture: *const Texture, px: f32, py: f32) ColorF {
+    if (texture.format != .rgba8 or texture.width == 0 or texture.height == 0 or texture.pixels.len < @as(usize, texture.width) * @as(usize, texture.height) * 4) {
+        return .{};
+    }
+
+    const inv = xforms.inverse(&paint.xform) orelse xforms.identity();
+    const pt = xforms.point(&inv, px, py);
+    const ix = wrappedIndex(pt[0], paint.extent[0], texture.width);
+    const iy = wrappedIndex(pt[1], paint.extent[1], texture.height);
+    const index = (@as(usize, iy) * @as(usize, texture.width) + ix) * 4;
+    const alpha = u8ToNorm(texture.pixels[index + 3]) * paint.inner_color.a;
+    return .{
+        .r = u8ToNorm(texture.pixels[index + 0]) * alpha,
+        .g = u8ToNorm(texture.pixels[index + 1]) * alpha,
+        .b = u8ToNorm(texture.pixels[index + 2]) * alpha,
+        .a = alpha,
+    };
+}
+
+fn scissorMask(scissor: *const color.Scissor, px: f32, py: f32) f32 {
+    if (scissor.extent[0] < 0 or scissor.extent[1] < 0) return 1;
+
+    const inv = xforms.inverse(&scissor.xform) orelse return 0;
+    const pt = xforms.point(&inv, px, py);
+    var sx = @abs(pt[0]) - scissor.extent[0];
+    var sy = @abs(pt[1]) - scissor.extent[1];
+    const scale_x = @sqrt(scissor.xform[0] * scissor.xform[0] + scissor.xform[2] * scissor.xform[2]);
+    const scale_y = @sqrt(scissor.xform[1] * scissor.xform[1] + scissor.xform[3] * scissor.xform[3]);
+    sx = 0.5 - sx * scale_x;
+    sy = 0.5 - sy * scale_y;
+    return std.math.clamp(sx, 0, 1) * std.math.clamp(sy, 0, 1);
+}
+
+fn findTexture(textures: []const Texture, id: image.ImageId) ?*const Texture {
+    for (textures) |*texture| {
+        if (texture.id == id) return texture;
+    }
+    return null;
+}
+
+fn wrappedIndex(value: f32, extent: f32, size: u32) u32 {
+    if (size == 0) return 0;
+    const local_extent = if (@abs(extent) > 0.0001) @abs(extent) else @as(f32, @floatFromInt(size));
+    const scaled = value / local_extent * @as(f32, @floatFromInt(size));
+    const wrapped = @mod(@floor(scaled), @as(f32, @floatFromInt(size)));
+    return @intFromFloat(wrapped);
+}
+
+fn sdroundrect(pt: [2]f32, ext: [2]f32, rad: f32) f32 {
+    const ext2 = [2]f32{ ext[0] - rad, ext[1] - rad };
+    const dx = @abs(pt[0]) - ext2[0];
+    const dy = @abs(pt[1]) - ext2[1];
+    return @min(@max(dx, dy), 0) + @sqrt(@max(dx, 0) * @max(dx, 0) + @max(dy, 0) * @max(dy, 0)) - rad;
+}
+
+fn mixPremul(inner: color.Color, outer: color.Color, t: f32) ColorF {
+    const inv = 1 - t;
+    return .{
+        .r = inner.r * inner.a * inv + outer.r * outer.a * t,
+        .g = inner.g * inner.a * inv + outer.g * outer.a * t,
+        .b = inner.b * inner.a * inv + outer.b * outer.a * t,
+        .a = inner.a * inv + outer.a * t,
+    };
 }
 
 fn pixelExtent(value: f32) u32 {

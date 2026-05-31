@@ -11,6 +11,7 @@ const sparse = okys.systems.backend_sparse_strip;
 const Backend = sparse.Backend;
 const Context = okys.state.context.Context;
 const frame_ops = okys.ops.frame;
+const image_ops = okys.ops.image;
 const paint_ops = okys.ops.paint;
 const path_ops = okys.ops.path;
 const render_ops = okys.ops.render;
@@ -191,6 +192,120 @@ test "sparse solid paint composites calls in draw order" {
     try testing.expectEqual([4]u8{ 128, 0, 128, 255 }, rgbaAt(backend, 8, 8));
 }
 
+test "sparse linear gradient resolves into proof surface" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = paint_ops.linearGradient(ctx, 0, 0, 16, 0, color.rgbaf(1, 0, 0, 1), color.rgbaf(0, 0, 1, 1));
+    queuePaintRect(&iface, paint, 0, 0, 16, 16, disabled_scissor);
+    try testing.expect(backend.build());
+
+    const mid = rgbaAt(backend, 8, 8);
+    try testing.expect(mid[0] > 80 and mid[0] < 180);
+    try testing.expect(mid[2] > 80 and mid[2] < 180);
+    try testing.expectEqual(@as(u8, 255), mid[3]);
+}
+
+test "sparse radial gradient resolves center and edge colors" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = paint_ops.radialGradient(ctx, 8, 8, 0, 10, color.rgbaf(1, 0, 0, 1), color.rgbaf(0, 0, 1, 1));
+    queuePaintRect(&iface, paint, 0, 0, 18, 18, disabled_scissor);
+    try testing.expect(backend.build());
+
+    const center = rgbaAt(backend, 8, 8);
+    const edge = rgbaAt(backend, 17, 8);
+    try testing.expect(center[0] > center[2]);
+    try testing.expect(edge[2] > edge[0]);
+}
+
+test "sparse image pattern samples uploaded rgba texture" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const pixels = [_]u8{
+        255, 0, 0,   255, 0,   255, 0,   255,
+        0,   0, 255, 255, 255, 255, 255, 255,
+    };
+    const id = image_ops.createImageRGBA(ctx, 2, 2, &pixels);
+    try testing.expect(id != .none);
+
+    const paint = paint_ops.imagePattern(ctx, 0, 0, 2, 2, 0, @intCast(@intFromEnum(id)), 1);
+    queuePaintRect(&iface, paint, 0, 0, 8, 8, disabled_scissor);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 255, 0, 0, 255 }, rgbaAt(backend, 0, 0));
+    try testing.expectEqual([4]u8{ 0, 255, 0, 255 }, rgbaAt(backend, 1, 0));
+    try testing.expectEqual([4]u8{ 0, 0, 255, 255 }, rgbaAt(backend, 0, 1));
+}
+
+test "sparse image update changes later proof output" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 16, 16, 1);
+
+    var pixels = [_]u8{ 255, 0, 0, 255 };
+    const id = image_ops.createImageRGBA(ctx, 1, 1, &pixels);
+    try testing.expect(id != .none);
+    pixels = .{ 0, 0, 255, 255 };
+    image_ops.updateImage(ctx, id, &pixels);
+
+    const paint = paint_ops.imagePattern(ctx, 0, 0, 1, 1, 0, @intCast(@intFromEnum(id)), 1);
+    queuePaintRect(&iface, paint, 0, 0, 4, 4, disabled_scissor);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 0, 0, 255, 255 }, rgbaAt(backend, 1, 1));
+}
+
+test "sparse scissor masks proof surface" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const scissor: color.Scissor = .{
+        .xform = .{ 1, 0, 0, 1, 8, 8 },
+        .extent = .{ 4, 4 },
+    };
+    queuePaintRect(&iface, color.solid(color.rgbaf(0, 1, 0, 1)), 0, 0, 16, 16, scissor);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 0, 255, 0, 255 }, rgbaAt(backend, 8, 8));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 2, 2));
+}
+
+test "sparse gradient composites over solid fill in draw order" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 0, 0, 16, 16);
+    const paint = paint_ops.linearGradient(ctx, 0, 0, 16, 0, color.rgbaf(0, 0, 1, 0.5), color.rgbaf(0, 0, 1, 0.5));
+    queuePaintRect(&iface, paint, 0, 0, 16, 16, disabled_scissor);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 128, 0, 128, 255 }, rgbaAt(backend, 8, 8));
+}
+
 test "sparse frontend curve renders through analytic proof path" {
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
@@ -270,6 +385,10 @@ fn queueRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f
 
 fn queuePaintedRect(iface: *const okys.render.interface.RenderInterface, c: color.Color, x0: f32, y0: f32, x1: f32, y1: f32) void {
     const paint = color.solid(c);
+    queuePaintRect(iface, paint, x0, y0, x1, y1, disabled_scissor);
+}
+
+fn queuePaintRect(iface: *const okys.render.interface.RenderInterface, paint: color.Paint, x0: f32, y0: f32, x1: f32, y1: f32, scissor: color.Scissor) void {
     const points = [_]Point{
         .{ .x = x0, .y = y0 },
         .{ .x = x1, .y = y0 },
@@ -277,7 +396,7 @@ fn queuePaintedRect(iface: *const okys.render.interface.RenderInterface, c: colo
         .{ .x = x0, .y = y1 },
     };
     const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
-    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ x0, y0, x1, y1 }, &paths, &points);
+    iface.fill(iface.ctx, &paint, &scissor, .{ x0, y0, x1, y1 }, &paths, &points);
 }
 
 fn alphaAt(backend: *const Backend, s: sparse.Strip, x: u16, y: u16) u8 {

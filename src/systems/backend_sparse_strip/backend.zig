@@ -26,6 +26,25 @@ pub const Strip = strip.Strip;
 pub const TileRef = strip.TileRef;
 pub const FillRule = strip.FillRule;
 
+const SparseTexture = struct {
+    texture: Texture,
+    pixels: std.ArrayList(u8) = .empty,
+
+    fn deinit(self: *SparseTexture, gpa: std.mem.Allocator) void {
+        self.pixels.deinit(gpa);
+    }
+
+    fn view(self: *const SparseTexture) fine.Texture {
+        return .{
+            .id = self.texture.id,
+            .width = self.texture.width,
+            .height = self.texture.height,
+            .format = self.texture.format,
+            .pixels = self.pixels.items,
+        };
+    }
+};
+
 pub const Backend = struct {
     gpa: std.mem.Allocator,
     calls: std.ArrayList(EncodedCall) = .empty,
@@ -35,7 +54,8 @@ pub const Backend = struct {
     strip_segment_indices: std.ArrayList(u32) = .empty,
     alphas: std.ArrayList(u8) = .empty,
     surface: std.ArrayList(u8) = .empty,
-    textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
+    textures: std.AutoArrayHashMapUnmanaged(ImageId, SparseTexture) = .empty,
+    texture_views: std.ArrayList(fine.Texture) = .empty,
 
     viewport_width: f32 = 0,
     viewport_height: f32 = 0,
@@ -58,7 +78,11 @@ pub const Backend = struct {
         self.strip_segment_indices.deinit(gpa);
         self.alphas.deinit(gpa);
         self.surface.deinit(gpa);
+        for (self.textures.values()) |*texture| {
+            texture.deinit(gpa);
+        }
         self.textures.deinit(gpa);
+        self.texture_views.deinit(gpa);
         gpa.destroy(self);
     }
 
@@ -87,6 +111,7 @@ pub const Backend = struct {
     pub fn build(self: *Backend) bool {
         bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles) catch return false;
         coarse.build(self.gpa, self.tiles.items, &self.strips, &self.strip_segment_indices) catch return false;
+        self.rebuildTextureViews() catch return false;
         fine.build(
             self.gpa,
             self.fill_rule,
@@ -95,6 +120,7 @@ pub const Backend = struct {
             self.calls.items,
             self.segments.items,
             self.strip_segment_indices.items,
+            self.texture_views.items,
             &self.strips,
             &self.alphas,
             &self.surface,
@@ -127,6 +153,14 @@ pub const Backend = struct {
             self.segments.shrinkRetainingCapacity(@intCast(range.start));
         };
     }
+
+    fn rebuildTextureViews(self: *Backend) !void {
+        self.texture_views.clearRetainingCapacity();
+        try self.texture_views.ensureTotalCapacity(self.gpa, self.textures.count());
+        for (self.textures.values()) |*texture| {
+            self.texture_views.appendAssumeCapacity(texture.view());
+        }
+    }
 };
 
 fn from(ctx: *anyopaque) *Backend {
@@ -134,34 +168,56 @@ fn from(ctx: *anyopaque) *Backend {
 }
 
 fn createTexture(ctx: *anyopaque, id: ImageId, w: u32, h: u32, fmt: TexFormat, data: ?[]const u8) bool {
-    _ = data;
     const self = from(ctx);
-    self.textures.put(self.gpa, id, .{
-        .id = id,
-        .width = w,
-        .height = h,
-        .format = fmt,
-    }) catch return false;
+    var texture: SparseTexture = .{
+        .texture = .{
+            .id = id,
+            .width = w,
+            .height = h,
+            .format = fmt,
+        },
+    };
+    const len = byteLen(w, h, fmt) orelse return false;
+    if (data) |bytes| {
+        if (bytes.len != len) return false;
+        texture.pixels.appendSlice(self.gpa, bytes) catch return false;
+    } else {
+        texture.pixels.resize(self.gpa, len) catch return false;
+        @memset(texture.pixels.items, 0);
+    }
+    errdefer texture.deinit(self.gpa);
+    self.textures.put(self.gpa, id, texture) catch return false;
     return true;
 }
 
 fn updateTexture(ctx: *anyopaque, id: ImageId, x: u32, y: u32, w: u32, h: u32, data: []const u8) void {
-    _ = ctx;
-    _ = id;
-    _ = x;
-    _ = y;
-    _ = w;
-    _ = h;
-    _ = data;
+    const self = from(ctx);
+    const texture = self.textures.getPtr(id) orelse return;
+    const bpp = bytesPerPixel(texture.texture.format) orelse return;
+    if (w == 0 or h == 0) return;
+    if (x + w > texture.texture.width or y + h > texture.texture.height) return;
+    const row_bytes: usize = @as(usize, w) * bpp;
+    if (data.len != row_bytes * @as(usize, h)) return;
+
+    var row: u32 = 0;
+    while (row < h) : (row += 1) {
+        const src = @as(usize, row) * row_bytes;
+        const dst = (@as(usize, y + row) * @as(usize, texture.texture.width) + x) * bpp;
+        @memcpy(texture.pixels.items[dst..][0..row_bytes], data[src..][0..row_bytes]);
+    }
 }
 
 fn deleteTexture(ctx: *anyopaque, id: ImageId) void {
-    _ = from(ctx).textures.swapRemove(id);
+    const self = from(ctx);
+    if (self.textures.fetchSwapRemove(id)) |entry| {
+        var texture = entry.value;
+        texture.deinit(self.gpa);
+    }
 }
 
 fn textureSize(ctx: *anyopaque, id: ImageId) ?[2]u32 {
     const texture = from(ctx).textures.get(id) orelse return null;
-    return .{ texture.width, texture.height };
+    return .{ texture.texture.width, texture.texture.height };
 }
 
 fn viewport(ctx: *anyopaque, width: f32, height: f32, dpr: f32) void {
@@ -213,4 +269,16 @@ fn singleConvexPath(paths: []const PathRange, point_len: usize) bool {
         convex = p.convex;
     }
     return valid == 1 and convex;
+}
+
+fn byteLen(w: u32, h: u32, format: TexFormat) ?usize {
+    const bpp = bytesPerPixel(format) orelse return null;
+    return @as(usize, w) * @as(usize, h) * bpp;
+}
+
+fn bytesPerPixel(format: TexFormat) ?usize {
+    return switch (format) {
+        .rgba8 => 4,
+        .a8 => 1,
+    };
 }
