@@ -66,6 +66,8 @@ test "GPU packet simulator matches sparse CPU proof for curves holes and stroke 
     state_ops.strokeWidth(ctx, 4);
     state_ops.lineJoin(ctx, .round);
     state_ops.lineCap(ctx, .round);
+    const dash_pattern = [_]f32{ 8, 4 };
+    state_ops.lineDash(ctx, &dash_pattern);
     path_ops.beginPath(ctx);
     path_ops.moveTo(ctx, 8, 40);
     path_ops.lineTo(ctx, 24, 28);

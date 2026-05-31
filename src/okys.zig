@@ -30,6 +30,7 @@ pub const ops = struct {
 
 pub const systems = struct {
     pub const transform = @import("systems/transform.zig");
+    pub const dash = @import("systems/dash.zig");
     pub const flatten = @import("systems/flatten.zig");
     pub const stroke = @import("systems/stroke.zig");
     pub const convex = @import("systems/convex.zig");

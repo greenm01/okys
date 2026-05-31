@@ -17,6 +17,7 @@ pub fn beginFrame(ctx: *Context, w: f32, h: f32, dpr: f32) void {
 
     ctx.commands.clear();
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
     ctx.frame_arena.reset();
     ctx.frame_profile.resetFrame();
@@ -32,5 +33,6 @@ pub fn endFrame(ctx: *Context) void {
 pub fn cancelFrame(ctx: *Context) void {
     ctx.commands.clear();
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }

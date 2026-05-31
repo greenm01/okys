@@ -28,6 +28,9 @@ int main(void) {
     okyMiterLimit(ctx, 4.0f);
     okyLineCap(ctx, OKY_ROUND);
     okyLineJoin(ctx, OKY_BEVEL);
+    float dash[2] = {6.0f, 3.0f};
+    okyLineDash(ctx, dash, 2);
+    okyLineDashOffset(ctx, 1.5f);
     okyGlobalAlpha(ctx, 0.75f);
 
     okyTranslate(ctx, 10.0f, 20.0f);

@@ -89,6 +89,20 @@ export fn okyLineJoin(ctx: ?*Context, join: c_int) void {
     if (ctx) |c| state_ops.lineJoin(c, lineJoinFromInt(join));
 }
 
+export fn okyLineDash(ctx: ?*Context, pattern: ?[*]const f32, count: c_int) void {
+    if (ctx == null) return;
+    if (pattern == null or count <= 0) {
+        state_ops.lineDash(ctx.?, &.{});
+        return;
+    }
+    const len = @min(@as(usize, @intCast(count)), state_ops.max_line_dashes);
+    state_ops.lineDash(ctx.?, pattern.?[0..len]);
+}
+
+export fn okyLineDashOffset(ctx: ?*Context, offset: f32) void {
+    if (ctx) |c| state_ops.lineDashOffset(c, offset);
+}
+
 export fn okyGlobalAlpha(ctx: ?*Context, alpha: f32) void {
     if (ctx) |c| state_ops.globalAlpha(c, alpha);
 }

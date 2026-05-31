@@ -7,6 +7,7 @@ const draw_state = @import("../state/draw_state.zig");
 const State = draw_state.State;
 const LineCap = draw_state.LineCap;
 const LineJoin = draw_state.LineJoin;
+pub const max_line_dashes = draw_state.max_line_dashes;
 const xforms = @import("../systems/transform.zig");
 const Transform = @import("../types/color.zig").Transform;
 
@@ -39,6 +40,29 @@ pub fn lineCap(ctx: *Context, cap: LineCap) void {
 
 pub fn lineJoin(ctx: *Context, join: LineJoin) void {
     ctx.state().line_join = join;
+}
+
+pub fn lineDash(ctx: *Context, pattern: []const f32) void {
+    const state = ctx.state();
+    state.line_dash = @splat(0);
+    state.line_dash_count = 0;
+
+    if (pattern.len == 0) return;
+
+    const count = @min(pattern.len, max_line_dashes);
+    for (pattern[0..count], 0..) |value, i| {
+        if (!std.math.isFinite(value) or value <= 0) {
+            state.line_dash = @splat(0);
+            state.line_dash_count = 0;
+            return;
+        }
+        state.line_dash[i] = value;
+    }
+    state.line_dash_count = @intCast(count);
+}
+
+pub fn lineDashOffset(ctx: *Context, offset: f32) void {
+    ctx.state().line_dash_offset = if (std.math.isFinite(offset)) offset else 0;
 }
 
 pub fn globalAlpha(ctx: *Context, alpha: f32) void {

@@ -42,6 +42,8 @@ proc okyStrokeWidth(ctx: ptr OKYcontext; width: cfloat) {.importc, header: "okys
 proc okyMiterLimit(ctx: ptr OKYcontext; limit: cfloat) {.importc, header: "okys.h".}
 proc okyLineCap(ctx: ptr OKYcontext; cap: cint) {.importc, header: "okys.h".}
 proc okyLineJoin(ctx: ptr OKYcontext; join: cint) {.importc, header: "okys.h".}
+proc okyLineDash(ctx: ptr OKYcontext; pattern: ptr cfloat; count: cint) {.importc, header: "okys.h".}
+proc okyLineDashOffset(ctx: ptr OKYcontext; offset: cfloat) {.importc, header: "okys.h".}
 proc okyGlobalAlpha(ctx: ptr OKYcontext; alpha: cfloat) {.importc, header: "okys.h".}
 
 proc okyResetTransform(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
@@ -119,6 +121,9 @@ okyStrokeWidth(ctx, 2.0)
 okyMiterLimit(ctx, 4.0)
 okyLineCap(ctx, OKY_ROUND)
 okyLineJoin(ctx, OKY_BEVEL)
+var dash = [6.0.cfloat, 3.0.cfloat]
+okyLineDash(ctx, addr dash[0], 2)
+okyLineDashOffset(ctx, 1.5)
 okyGlobalAlpha(ctx, 0.75)
 
 okyTranslate(ctx, 10.0, 20.0)

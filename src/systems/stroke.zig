@@ -10,6 +10,7 @@ const LineCap = draw_state.LineCap;
 const LineJoin = draw_state.LineJoin;
 const path = @import("../types/path.zig");
 const Point = path.Point;
+const dash = @import("dash.zig");
 const flatten = @import("flatten.zig");
 const convex = @import("convex.zig");
 const xforms = @import("transform.zig");
@@ -27,9 +28,15 @@ pub fn buildOutlineWithWidth(ctx: *Context, stroke_width: f32) void {
     const half_width = stroke_width * 0.5;
     if (half_width <= 0) return;
 
-    for (ctx.cache.paths.items) |src_path| {
+    const source = if (dash.active(ctx) and dash.build(ctx)) &ctx.dash_cache else &ctx.cache;
+    buildOutlineFromCache(ctx, source, half_width);
+    finishOutline(&ctx.stroke_outline, ctx.state().miter_limit);
+}
+
+fn buildOutlineFromCache(ctx: *Context, source: *const PathCache, half_width: f32) void {
+    for (source.paths.items) |src_path| {
         if (src_path.point_count < 2) continue;
-        const pts = ctx.cache.points.items[src_path.point_start..][0..src_path.point_count];
+        const pts = source.points.items[src_path.point_start..][0..src_path.point_count];
         if (src_path.closed) {
             if (src_path.point_count < 3) continue;
             buildClosedPath(ctx, pts, half_width);
@@ -37,8 +44,6 @@ pub fn buildOutlineWithWidth(ctx: *Context, stroke_width: f32) void {
             buildOpenPath(ctx, pts, half_width, ctx.state().line_cap, ctx.state().line_join);
         }
     }
-
-    finishOutline(&ctx.stroke_outline, ctx.state().miter_limit);
 }
 
 pub fn effectiveStrokeWidth(ctx: *Context) f32 {

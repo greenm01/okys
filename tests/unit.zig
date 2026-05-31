@@ -17,6 +17,7 @@ const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
 const texture_tests = @import("textures.zig");
 const tiger_data_tests = @import("tiger_data.zig");
+const stroke_dash_tests = @import("stroke_dash.zig");
 const color = okys.types.color;
 const Context = okys.state.context.Context;
 const paint_ops = okys.ops.paint;
@@ -49,6 +50,7 @@ test "all production modules analyze" {
     _ = okys.ops.state;
     _ = okys.ops.image;
     _ = okys.systems.transform;
+    _ = okys.systems.dash;
     _ = okys.systems.flatten;
     _ = okys.systems.stroke;
     _ = okys.systems.convex;
@@ -83,6 +85,7 @@ test "all production modules analyze" {
     _ = sokol_device_tests;
     _ = texture_tests;
     _ = tiger_data_tests;
+    _ = stroke_dash_tests;
 }
 
 test "rgba maps 0..255 to 0..1" {

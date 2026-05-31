@@ -12,6 +12,7 @@ const dist_tol: f32 = 0.01;
 pub fn beginPath(ctx: *Context) void {
     ctx.commands.clear();
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }
 
@@ -23,6 +24,7 @@ pub fn moveTo(ctx: *Context, x: f32, y: f32) void {
     ctx.command_x = x;
     ctx.command_y = y;
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }
 
@@ -34,6 +36,7 @@ pub fn lineTo(ctx: *Context, x: f32, y: f32) void {
     ctx.command_x = x;
     ctx.command_y = y;
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }
 
@@ -51,6 +54,7 @@ pub fn bezierTo(ctx: *Context, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y
     ctx.command_x = x;
     ctx.command_y = y;
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }
 
@@ -122,6 +126,7 @@ pub fn arcTo(ctx: *Context, x1: f32, y1: f32, x2: f32, y2: f32, radius: f32) voi
 pub fn closePath(ctx: *Context) void {
     ctx.commands.tag(ctx.gpa, .close);
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }
 
@@ -129,6 +134,7 @@ pub fn pathWinding(ctx: *Context, dir: Winding) void {
     ctx.commands.tag(ctx.gpa, .winding);
     ctx.commands.float(ctx.gpa, @floatFromInt(@intFromEnum(dir)));
     ctx.cache.clear();
+    ctx.dash_cache.clear();
     ctx.stroke_outline.clear();
 }
 

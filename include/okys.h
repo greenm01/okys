@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
 #define OKY_ABI_VERSION 0u
+#define OKY_MAX_LINE_DASHES 16
 
 /* Context creation flags. Mirror NanoVG's flag spirit. */
 enum OKYcreateFlags {
@@ -89,6 +90,8 @@ void okyStrokeWidth(OKYcontext *ctx, float width);
 void okyMiterLimit(OKYcontext *ctx, float limit);
 void okyLineCap(OKYcontext *ctx, int cap);
 void okyLineJoin(OKYcontext *ctx, int join);
+void okyLineDash(OKYcontext *ctx, const float *pattern, int count);
+void okyLineDashOffset(OKYcontext *ctx, float offset);
 void okyGlobalAlpha(OKYcontext *ctx, float alpha);
 
 /* --- transforms -------------------------------------------------------- */
