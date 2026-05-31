@@ -26,6 +26,18 @@ pub const Strip = strip.Strip;
 pub const TileRef = strip.TileRef;
 pub const FillRule = strip.FillRule;
 
+pub const Profile = struct {
+    bin_ns: u64 = 0,
+    coarse_ns: u64 = 0,
+    texture_views_ns: u64 = 0,
+    fine_ns: u64 = 0,
+    fine_profile: fine.Profile = .{},
+
+    pub fn reset(self: *Profile) void {
+        self.* = .{};
+    }
+};
+
 const SparseTexture = struct {
     texture: Texture,
     pixels: std.ArrayList(u8) = .empty,
@@ -109,9 +121,25 @@ pub const Backend = struct {
     }
 
     pub fn build(self: *Backend) bool {
+        return self.buildProfiled(null);
+    }
+
+    pub fn buildProfiled(self: *Backend, profile: ?*Profile) bool {
+        if (profile) |p| p.reset();
+
+        const bin_start = profileStart(profile);
         bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles) catch return false;
+        if (profile) |p| p.bin_ns += elapsedSince(bin_start);
+
+        const coarse_start = profileStart(profile);
         coarse.build(self.gpa, self.tiles.items, &self.strips, &self.strip_segment_indices) catch return false;
+        if (profile) |p| p.coarse_ns += elapsedSince(coarse_start);
+
+        const texture_views_start = profileStart(profile);
         self.rebuildTextureViews() catch return false;
+        if (profile) |p| p.texture_views_ns += elapsedSince(texture_views_start);
+
+        const fine_start = profileStart(profile);
         fine.build(
             self.gpa,
             self.fill_rule,
@@ -124,7 +152,9 @@ pub const Backend = struct {
             &self.strips,
             &self.alphas,
             &self.surface,
+            if (profile) |p| &p.fine_profile else null,
         ) catch return false;
+        if (profile) |p| p.fine_ns += elapsedSince(fine_start);
         return true;
     }
 
@@ -281,4 +311,19 @@ fn bytesPerPixel(format: TexFormat) ?usize {
         .rgba8 => 4,
         .a8 => 1,
     };
+}
+
+fn profileStart(profile: ?*Profile) u64 {
+    if (profile == null) return 0;
+    return nowNs();
+}
+
+fn elapsedSince(start: u64) u64 {
+    return nowNs() - start;
+}
+
+fn nowNs() u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) unreachable;
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }

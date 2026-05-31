@@ -15,11 +15,52 @@ pub const Texture = struct {
     pixels: []const u8,
 };
 
+pub const Profile = struct {
+    clear_ns: u64 = 0,
+    boundary_index_ns: u64 = 0,
+    boundary_alpha_ns: u64 = 0,
+    boundary_composite_ns: u64 = 0,
+    solid_scan_ns: u64 = 0,
+    solid_composite_ns: u64 = 0,
+    boundary_tiles: usize = 0,
+    solid_tiles: usize = 0,
+    boundary_pixels: usize = 0,
+    solid_pixels: usize = 0,
+    composite_pixels: usize = 0,
+    solid_fast_pixels: usize = 0,
+    opaque_write_pixels: usize = 0,
+    rect_fast_calls: usize = 0,
+    rect_fast_pixels: usize = 0,
+
+    pub fn reset(self: *Profile) void {
+        self.* = .{};
+    }
+};
+
 const ColorF = struct {
     r: f32 = 0,
     g: f32 = 0,
     b: f32 = 0,
     a: f32 = 0,
+};
+
+const SolidPaint = struct {
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+};
+
+const Rect = struct {
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+};
+
+const CompositeResult = struct {
+    touched: bool = false,
+    opaque_write: bool = false,
 };
 
 pub fn build(
@@ -34,23 +75,50 @@ pub fn build(
     strips: *std.ArrayList(strip.Strip),
     alphas: *std.ArrayList(u8),
     surface: *std.ArrayList(u8),
+    profile: ?*Profile,
 ) !void {
+    if (profile) |p| p.reset();
     _ = strip_segment_indices;
     alphas.clearRetainingCapacity();
     const width = pixelExtent(viewport_width);
     const height = pixelExtent(viewport_height);
+
+    const clear_start = profileStart(profile);
     try surface.resize(gpa, @as(usize, width) * @as(usize, height) * 4);
     @memset(surface.items, 0);
+    if (profile) |p| p.clear_ns += elapsedSince(clear_start);
 
     var boundary_tiles = BoundarySet.init(gpa);
     defer boundary_tiles.deinit();
+
+    const boundary_index_start = profileStart(profile);
     try boundary_tiles.ensureTotalCapacity(@intCast(strips.items.len));
     for (strips.items) |s| {
         try boundary_tiles.put(boundaryKey(s.call_index, strip.tileCoord(@floatFromInt(s.x)), strip.tileCoord(@floatFromInt(s.y))), {});
     }
+    if (profile) |p| p.boundary_index_ns += elapsedSince(boundary_index_start);
 
     for (calls, 0..) |call, call_index| {
         const call_fill_rule = fillRuleForCall(fill_rule, call.kind);
+        const solid = solidPaint(call);
+        if (solid) |sp| {
+            if (rectForCall(call, segments)) |rect| {
+                try renderSolidRectFast(
+                    gpa,
+                    rect,
+                    sp,
+                    @intCast(call_index),
+                    strips,
+                    alphas,
+                    width,
+                    height,
+                    surface.items,
+                    profile,
+                );
+                continue;
+            }
+        }
+
         for (strips.items) |*s| {
             if (s.call_index != call_index) continue;
             try renderBoundaryStrip(
@@ -64,6 +132,8 @@ pub fn build(
                 width,
                 height,
                 surface.items,
+                solid,
+                profile,
             );
         }
         renderSolidInterior(
@@ -76,6 +146,8 @@ pub fn build(
             width,
             height,
             surface.items,
+            solid,
+            profile,
         );
     }
 }
@@ -93,8 +165,12 @@ fn renderBoundaryStrip(
     width: u32,
     height: u32,
     surface: []u8,
+    solid: ?SolidPaint,
+    profile: ?*Profile,
 ) !void {
     const start = alphas.items.len;
+
+    const alpha_start = profileStart(profile);
     var local_y: u16 = 0;
     while (local_y < strip.tile_size) : (local_y += 1) {
         var local_x: u16 = 0;
@@ -107,17 +183,49 @@ fn renderBoundaryStrip(
                 segments,
             );
             try alphas.append(gpa, alpha);
-            compositePaint(
-                call,
-                textures,
-                alpha,
-                s.x + local_x,
-                s.y + local_y,
-                width,
-                height,
-                surface,
-            );
         }
+    }
+    if (profile) |p| {
+        p.boundary_alpha_ns += elapsedSince(alpha_start);
+        p.boundary_tiles += 1;
+        p.boundary_pixels += strip.tile_area;
+    }
+
+    var touched: usize = 0;
+    const composite_start = profileStart(profile);
+    local_y = 0;
+    var alpha_index = start;
+    while (local_y < strip.tile_size) : (local_y += 1) {
+        var local_x: u16 = 0;
+        while (local_x < strip.tile_size) : (local_x += 1) {
+            const alpha = alphas.items[alpha_index];
+            if (solid) |sp| {
+                const result = compositeSolidPaint(sp, alpha, s.x + local_x, s.y + local_y, width, height, surface);
+                if (result.touched) touched += 1;
+                if (result.opaque_write) {
+                    if (profile) |p| p.opaque_write_pixels += 1;
+                }
+            } else {
+                if (compositePaint(
+                    call,
+                    textures,
+                    alpha,
+                    s.x + local_x,
+                    s.y + local_y,
+                    width,
+                    height,
+                    surface,
+                )) {
+                    touched += 1;
+                }
+            }
+            alpha_index += 1;
+        }
+    }
+    if (profile) |p| {
+        p.boundary_composite_ns += elapsedSince(composite_start);
+        p.composite_pixels += touched;
+        if (solid != null) p.solid_fast_pixels += touched;
     }
     s.alpha = .{ .start = @intCast(start), .count = strip.tile_area };
 }
@@ -132,6 +240,8 @@ fn renderSolidInterior(
     width: u32,
     height: u32,
     surface: []u8,
+    solid: ?SolidPaint,
+    profile: ?*Profile,
 ) void {
     if (width == 0 or height == 0) return;
     const bounds = callBounds(call, segments);
@@ -142,6 +252,7 @@ fn renderSolidInterior(
     var tile_y = std.math.clamp(strip.tileCoord(bounds[1]), 0, max_tile_y);
     const tile_y_end = std.math.clamp(strip.tileCoord(bounds[3] - 0.001), 0, max_tile_y);
     const tile_size_f: f32 = @floatFromInt(strip.tile_size);
+    var scan_start = profileStart(profile);
 
     while (tile_y <= tile_y_end) : (tile_y += 1) {
         var tile_x = std.math.clamp(strip.tileCoord(bounds[0]), 0, max_tile_x);
@@ -151,20 +262,109 @@ fn renderSolidInterior(
             const sample_x = @as(f32, @floatFromInt(tile_x)) * tile_size_f + 0.5;
             const sample_y = @as(f32, @floatFromInt(tile_y)) * tile_size_f + 0.5;
             if (coverageAtForCall(fill_rule, sample_x, sample_y, call.segments, segments) == 0) continue;
-            compositeSolidTile(
-                call,
-                textures,
-                strip.tileOrigin(@intCast(tile_x)),
-                strip.tileOrigin(@intCast(tile_y)),
-                width,
-                height,
-                surface,
-            );
+            if (profile) |p| p.solid_scan_ns += elapsedSince(scan_start);
+
+            const composite_start = profileStart(profile);
+            const result = if (solid) |sp|
+                compositeSolidTile(sp, strip.tileOrigin(@intCast(tile_x)), strip.tileOrigin(@intCast(tile_y)), width, height, surface)
+            else
+                compositeGenericTile(call, textures, strip.tileOrigin(@intCast(tile_x)), strip.tileOrigin(@intCast(tile_y)), width, height, surface);
+            if (profile) |p| {
+                p.solid_composite_ns += elapsedSince(composite_start);
+                p.solid_tiles += 1;
+                p.solid_pixels += result.touched;
+                p.composite_pixels += result.touched;
+                p.opaque_write_pixels += result.opaque_writes;
+                if (solid != null) p.solid_fast_pixels += result.touched;
+                scan_start = profileStart(profile);
+            }
         }
+    }
+    if (profile) |p| p.solid_scan_ns += elapsedSince(scan_start);
+}
+
+fn renderSolidRectFast(
+    gpa: std.mem.Allocator,
+    rect: Rect,
+    solid: SolidPaint,
+    call_index: u32,
+    strips: *std.ArrayList(strip.Strip),
+    alphas: *std.ArrayList(u8),
+    width: u32,
+    height: u32,
+    surface: []u8,
+    profile: ?*Profile,
+) !void {
+    const alpha_start = profileStart(profile);
+    for (strips.items) |*s| {
+        if (s.call_index != call_index) continue;
+        const start = alphas.items.len;
+        try appendRectTileAlpha(gpa, rect, s.x, s.y, alphas);
+        s.alpha = .{ .start = @intCast(start), .count = strip.tile_area };
+        if (profile) |p| {
+            p.boundary_tiles += 1;
+            p.boundary_pixels += strip.tile_area;
+        }
+    }
+    if (profile) |p| p.boundary_alpha_ns += elapsedSince(alpha_start);
+
+    var touched: usize = 0;
+    var opaque_writes: usize = 0;
+    const composite_start = profileStart(profile);
+    const x_start = clampPixelStart(rect.x0, width);
+    const y_start = clampPixelStart(rect.y0, height);
+    const x_end = clampPixelEnd(rect.x1, width);
+    const y_end = clampPixelEnd(rect.y1, height);
+    var y = y_start;
+    while (y < y_end) : (y += 1) {
+        var x = x_start;
+        const y_alpha = coverage1D(@floatFromInt(y), rect.y0, rect.y1);
+        while (x < x_end) : (x += 1) {
+            const alpha = normToU8(coverage1D(@floatFromInt(x), rect.x0, rect.x1) * y_alpha);
+            const result = compositeSolidPaint(solid, alpha, @intCast(x), @intCast(y), width, height, surface);
+            if (result.touched) touched += 1;
+            if (result.opaque_write) opaque_writes += 1;
+        }
+    }
+
+    if (profile) |p| {
+        p.solid_composite_ns += elapsedSince(composite_start);
+        p.solid_pixels += touched;
+        p.composite_pixels += touched;
+        p.solid_fast_pixels += touched;
+        p.opaque_write_pixels += opaque_writes;
+        p.rect_fast_calls += 1;
+        p.rect_fast_pixels += touched;
     }
 }
 
+const TileCompositeResult = struct {
+    touched: usize = 0,
+    opaque_writes: usize = 0,
+};
+
 fn compositeSolidTile(
+    solid: SolidPaint,
+    x: u16,
+    y: u16,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) TileCompositeResult {
+    var result: TileCompositeResult = .{};
+    var local_y: u16 = 0;
+    while (local_y < strip.tile_size) : (local_y += 1) {
+        var local_x: u16 = 0;
+        while (local_x < strip.tile_size) : (local_x += 1) {
+            const pixel = compositeSolidPaint(solid, 255, x + local_x, y + local_y, width, height, surface);
+            if (pixel.touched) result.touched += 1;
+            if (pixel.opaque_write) result.opaque_writes += 1;
+        }
+    }
+    return result;
+}
+
+fn compositeGenericTile(
     call: encode.EncodedCall,
     textures: []const Texture,
     x: u16,
@@ -172,12 +372,28 @@ fn compositeSolidTile(
     width: u32,
     height: u32,
     surface: []u8,
-) void {
+) TileCompositeResult {
+    var result: TileCompositeResult = .{};
     var local_y: u16 = 0;
     while (local_y < strip.tile_size) : (local_y += 1) {
         var local_x: u16 = 0;
         while (local_x < strip.tile_size) : (local_x += 1) {
-            compositePaint(call, textures, 255, x + local_x, y + local_y, width, height, surface);
+            if (compositePaint(call, textures, 255, x + local_x, y + local_y, width, height, surface)) {
+                result.touched += 1;
+            }
+        }
+    }
+    return result;
+}
+
+fn appendRectTileAlpha(gpa: std.mem.Allocator, rect: Rect, tile_x: u16, tile_y: u16, alphas: *std.ArrayList(u8)) !void {
+    var local_y: u16 = 0;
+    while (local_y < strip.tile_size) : (local_y += 1) {
+        const y_alpha = coverage1D(@floatFromInt(tile_y + local_y), rect.y0, rect.y1);
+        var local_x: u16 = 0;
+        while (local_x < strip.tile_size) : (local_x += 1) {
+            const x_alpha = coverage1D(@floatFromInt(tile_x + local_x), rect.x0, rect.x1);
+            try alphas.append(gpa, normToU8(x_alpha * y_alpha));
         }
     }
 }
@@ -387,6 +603,97 @@ fn areaToAlpha(fill_rule: strip.FillRule, area: f32) u8 {
     return normToU8(coverage);
 }
 
+fn solidPaint(call: encode.EncodedCall) ?SolidPaint {
+    if (call.paint.image != 0 or !scissorDisabled(&call.scissor)) return null;
+    if (!sameColor(call.paint.inner_color, call.paint.outer_color)) return null;
+    const c = call.paint.inner_color;
+    return .{
+        .r = c.r * c.a,
+        .g = c.g * c.a,
+        .b = c.b * c.a,
+        .a = c.a,
+    };
+}
+
+fn sameColor(a: color.Color, b: color.Color) bool {
+    return a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a;
+}
+
+fn scissorDisabled(scissor: *const color.Scissor) bool {
+    return scissor.extent[0] < 0 or scissor.extent[1] < 0;
+}
+
+fn rectForCall(call: encode.EncodedCall, segments: []const encode.Segment) ?Rect {
+    if (call.kind != .fill or !call.convex or call.segments.count != 4) return null;
+    const bounds = callBounds(call, segments);
+    if (bounds[0] >= bounds[2] or bounds[1] >= bounds[3]) return null;
+
+    const start: usize = @intCast(call.segments.start);
+    var horizontal: usize = 0;
+    var vertical: usize = 0;
+    for (segments[start..][0..4]) |seg| {
+        if (seg.y0 == seg.y1) {
+            if (!atRectY(seg.y0, bounds) or @min(seg.x0, seg.x1) != bounds[0] or @max(seg.x0, seg.x1) != bounds[2]) return null;
+            horizontal += 1;
+        } else if (seg.x0 == seg.x1) {
+            if (!atRectX(seg.x0, bounds) or @min(seg.y0, seg.y1) != bounds[1] or @max(seg.y0, seg.y1) != bounds[3]) return null;
+            vertical += 1;
+        } else {
+            return null;
+        }
+    }
+    if (horizontal != 2 or vertical != 2) return null;
+    return .{ .x0 = bounds[0], .y0 = bounds[1], .x1 = bounds[2], .y1 = bounds[3] };
+}
+
+fn atRectX(x: f32, bounds: [4]f32) bool {
+    return x == bounds[0] or x == bounds[2];
+}
+
+fn atRectY(y: f32, bounds: [4]f32) bool {
+    return y == bounds[1] or y == bounds[3];
+}
+
+fn compositeSolidPaint(
+    solid: SolidPaint,
+    coverage_alpha: u8,
+    x: u16,
+    y: u16,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) CompositeResult {
+    if (coverage_alpha == 0) return .{};
+    if (x >= width or y >= height) return .{};
+
+    const index = (@as(usize, y) * @as(usize, width) + x) * 4;
+    if (coverage_alpha == 255 and solid.a >= 1) {
+        surface[index + 0] = normToU8(solid.r);
+        surface[index + 1] = normToU8(solid.g);
+        surface[index + 2] = normToU8(solid.b);
+        surface[index + 3] = 255;
+        return .{ .touched = true, .opaque_write = true };
+    }
+
+    const mask = u8ToNorm(coverage_alpha);
+    const src_a = solid.a * mask;
+    const src_r = solid.r * mask;
+    const src_g = solid.g * mask;
+    const src_b = solid.b * mask;
+
+    const dst_r = u8ToNorm(surface[index + 0]);
+    const dst_g = u8ToNorm(surface[index + 1]);
+    const dst_b = u8ToNorm(surface[index + 2]);
+    const dst_a = u8ToNorm(surface[index + 3]);
+    const inv_a = 1 - src_a;
+
+    surface[index + 0] = normToU8(src_r + dst_r * inv_a);
+    surface[index + 1] = normToU8(src_g + dst_g * inv_a);
+    surface[index + 2] = normToU8(src_b + dst_b * inv_a);
+    surface[index + 3] = normToU8(src_a + dst_a * inv_a);
+    return .{ .touched = true };
+}
+
 fn compositePaint(
     call: encode.EncodedCall,
     textures: []const Texture,
@@ -396,14 +703,14 @@ fn compositePaint(
     width: u32,
     height: u32,
     surface: []u8,
-) void {
-    if (coverage_alpha == 0) return;
-    if (x >= width or y >= height) return;
+) bool {
+    if (coverage_alpha == 0) return false;
+    if (x >= width or y >= height) return false;
 
     const px = @as(f32, @floatFromInt(x)) + 0.5;
     const py = @as(f32, @floatFromInt(y)) + 0.5;
     const mask = u8ToNorm(coverage_alpha) * scissorMask(&call.scissor, px, py);
-    if (mask <= 0) return;
+    if (mask <= 0) return false;
 
     const c = resolvePaint(call, textures, px, py);
     const src_a = c.a * mask;
@@ -422,6 +729,7 @@ fn compositePaint(
     surface[index + 1] = normToU8(src_g + dst_g * inv_a);
     surface[index + 2] = normToU8(src_b + dst_b * inv_a);
     surface[index + 3] = normToU8(src_a + dst_a * inv_a);
+    return true;
 }
 
 fn resolvePaint(call: encode.EncodedCall, textures: []const Texture, px: f32, py: f32) ColorF {
@@ -438,6 +746,24 @@ fn resolvePaint(call: encode.EncodedCall, textures: []const Texture, px: f32, py
     const feather = @max(paint.feather, 0.0001);
     const d = std.math.clamp((sdroundrect(pt, paint.extent, paint.radius) + feather * 0.5) / feather, 0, 1);
     return mixPremul(paint.inner_color, paint.outer_color, d);
+}
+
+fn clampPixelStart(value: f32, extent: u32) u32 {
+    if (extent == 0 or value <= 0) return 0;
+    const floored = @floor(value);
+    if (floored >= @as(f32, @floatFromInt(extent))) return extent;
+    return @intFromFloat(floored);
+}
+
+fn clampPixelEnd(value: f32, extent: u32) u32 {
+    if (extent == 0 or value <= 0) return 0;
+    const ceiled = @ceil(value);
+    if (ceiled >= @as(f32, @floatFromInt(extent))) return extent;
+    return @intFromFloat(ceiled);
+}
+
+fn coverage1D(pixel: f32, lo: f32, hi: f32) f32 {
+    return std.math.clamp(@min(hi, pixel + 1) - @max(lo, pixel), 0, 1);
 }
 
 fn sampleImagePattern(paint: *const color.Paint, texture: *const Texture, px: f32, py: f32) ColorF {
@@ -561,4 +887,19 @@ fn u8ToNorm(value: u8) f32 {
 fn normToU8(value: f32) u8 {
     const clamped = std.math.clamp(value, 0, 1);
     return @intFromFloat(@floor(clamped * 255 + 0.5));
+}
+
+fn profileStart(profile: ?*Profile) u64 {
+    if (profile == null) return 0;
+    return nowNs();
+}
+
+fn elapsedSince(start: u64) u64 {
+    return nowNs() - start;
+}
+
+fn nowNs() u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) unreachable;
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }

@@ -94,6 +94,24 @@ test "sparse fine stage covers solid rect interior through solid spans" {
     try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 1, 1));
 }
 
+test "sparse profiled build reports fine-stage work counters" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, 4, 4, 20, 20);
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
+
+    try testing.expectEqual(backend.strips.items.len, profile.fine_profile.boundary_tiles);
+    try testing.expectEqual(backend.strips.items.len * sparse.strip.tile_area, profile.fine_profile.boundary_pixels);
+    try testing.expectEqual(@as(usize, 1), profile.fine_profile.rect_fast_calls);
+    try testing.expect(profile.fine_profile.rect_fast_pixels > 0);
+    try testing.expectEqual(profile.fine_profile.rect_fast_pixels, profile.fine_profile.solid_fast_pixels);
+    try testing.expect(profile.fine_profile.opaque_write_pixels > 0);
+}
+
 test "sparse fine stage uses analytic subpixel coverage" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
@@ -110,6 +128,22 @@ test "sparse fine stage uses analytic subpixel coverage" {
     const right_bottom = findStrip(backend, 12, 12, 0).?;
     try expectAlphaApprox(16, alphaAt(backend, right_bottom, 12, 12));
     try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 3, 4));
+}
+
+test "sparse rect fast path blends translucent solid paint" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 4, 4, 20, 20);
+    queuePaintedRect(&iface, color.rgbaf(0, 0, 1, 0.5), 4, 4, 20, 20);
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
+
+    try testing.expectEqual([4]u8{ 128, 0, 128, 255 }, rgbaAt(backend, 8, 8));
+    try testing.expectEqual(@as(usize, 2), profile.fine_profile.rect_fast_calls);
+    try testing.expect(profile.fine_profile.opaque_write_pixels > 0);
 }
 
 test "sparse even odd coverage cuts a hole from nested paths" {
@@ -202,12 +236,15 @@ test "sparse linear gradient resolves into proof surface" {
 
     const paint = paint_ops.linearGradient(ctx, 0, 0, 16, 0, color.rgbaf(1, 0, 0, 1), color.rgbaf(0, 0, 1, 1));
     queuePaintRect(&iface, paint, 0, 0, 16, 16, disabled_scissor);
-    try testing.expect(backend.build());
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
 
     const mid = rgbaAt(backend, 8, 8);
     try testing.expect(mid[0] > 80 and mid[0] < 180);
     try testing.expect(mid[2] > 80 and mid[2] < 180);
     try testing.expectEqual(@as(u8, 255), mid[3]);
+    try testing.expectEqual(@as(usize, 0), profile.fine_profile.rect_fast_calls);
+    try testing.expectEqual(@as(usize, 0), profile.fine_profile.solid_fast_pixels);
 }
 
 test "sparse radial gradient resolves center and edge colors" {

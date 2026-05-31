@@ -8,6 +8,7 @@ const Context = okys.state.context.Context;
 const SparseBackend = okys.systems.backend_sparse_strip.Backend;
 const StencilBackend = okys.systems.backend_stencil.Backend;
 const SparseCall = okys.systems.backend_sparse_strip.EncodedCall;
+const SparseProfile = okys.systems.backend_sparse_strip.Profile;
 const SparseSegment = okys.systems.backend_sparse_strip.Segment;
 const SparseStrip = okys.systems.backend_sparse_strip.Strip;
 const SparseTile = okys.systems.backend_sparse_strip.TileRef;
@@ -49,10 +50,33 @@ const Stats = struct {
     buffer_bytes: usize = 0,
 };
 
+const ProfileStats = struct {
+    bin_ns: u64 = 0,
+    coarse_ns: u64 = 0,
+    texture_views_ns: u64 = 0,
+    fine_ns: u64 = 0,
+    clear_ns: u64 = 0,
+    boundary_index_ns: u64 = 0,
+    boundary_alpha_ns: u64 = 0,
+    boundary_composite_ns: u64 = 0,
+    solid_scan_ns: u64 = 0,
+    solid_composite_ns: u64 = 0,
+    boundary_tiles: usize = 0,
+    solid_tiles: usize = 0,
+    boundary_pixels: usize = 0,
+    solid_pixels: usize = 0,
+    composite_pixels: usize = 0,
+    solid_fast_pixels: usize = 0,
+    opaque_write_pixels: usize = 0,
+    rect_fast_calls: usize = 0,
+    rect_fast_pixels: usize = 0,
+};
+
 const Result = struct {
     replay_ns: u64,
     build_ns: u64,
     stats: Stats,
+    profile: ProfileStats = .{},
 };
 
 pub fn main() !void {
@@ -77,10 +101,10 @@ pub fn main() !void {
     printHeader();
     for (scenes) |scene| {
         const stencil = try benchStencil(gpa, scene.frame);
-        printResult(scene.name, "stencil_cover", stencil);
+        printResult(scene.name, "stencil_cover", "cpu_build_only", stencil);
 
         const sparse = try benchSparse(gpa, scene.frame);
-        printResult(scene.name, "sparse_strip", sparse);
+        printResult(scene.name, "sparse_strip", "cpu_raster_composite", sparse);
     }
 }
 
@@ -135,6 +159,8 @@ fn benchStencil(gpa: std.mem.Allocator, frame: *const CapturedFrame) !Result {
 fn benchSparse(gpa: std.mem.Allocator, frame: *const CapturedFrame) !Result {
     var replay_total: u128 = 0;
     var build_total: u128 = 0;
+    var profile_total: ProfileStats = .{};
+    var profile_last: ProfileStats = .{};
     var stats: Stats = .{};
 
     var i: usize = 0;
@@ -147,13 +173,17 @@ fn benchSparse(gpa: std.mem.Allocator, frame: *const CapturedFrame) !Result {
         frame.replay(backend.interface());
         const replay_ns = nowNs() - replay_start;
 
+        var profile: SparseProfile = .{};
         const build_start = nowNs();
-        if (!backend.build()) return error.BenchmarkBuildFailed;
+        if (!backend.buildProfiled(&profile)) return error.BenchmarkBuildFailed;
         const build_ns = nowNs() - build_start;
 
         if (i >= warmup_iterations) {
             replay_total += replay_ns;
             build_total += build_ns;
+            const profile_stats = profileStats(profile);
+            addProfileDurations(&profile_total, profile_stats);
+            profile_last = profile_stats;
             stats = sparseStats(backend);
         }
     }
@@ -162,6 +192,7 @@ fn benchSparse(gpa: std.mem.Allocator, frame: *const CapturedFrame) !Result {
         .replay_ns = average(replay_total),
         .build_ns = average(build_total),
         .stats = stats,
+        .profile = averageProfile(profile_total, profile_last),
     };
 }
 
@@ -218,21 +249,84 @@ fn sparseStats(backend: *const SparseBackend) Stats {
     };
 }
 
+fn profileStats(profile: SparseProfile) ProfileStats {
+    return .{
+        .bin_ns = profile.bin_ns,
+        .coarse_ns = profile.coarse_ns,
+        .texture_views_ns = profile.texture_views_ns,
+        .fine_ns = profile.fine_ns,
+        .clear_ns = profile.fine_profile.clear_ns,
+        .boundary_index_ns = profile.fine_profile.boundary_index_ns,
+        .boundary_alpha_ns = profile.fine_profile.boundary_alpha_ns,
+        .boundary_composite_ns = profile.fine_profile.boundary_composite_ns,
+        .solid_scan_ns = profile.fine_profile.solid_scan_ns,
+        .solid_composite_ns = profile.fine_profile.solid_composite_ns,
+        .boundary_tiles = profile.fine_profile.boundary_tiles,
+        .solid_tiles = profile.fine_profile.solid_tiles,
+        .boundary_pixels = profile.fine_profile.boundary_pixels,
+        .solid_pixels = profile.fine_profile.solid_pixels,
+        .composite_pixels = profile.fine_profile.composite_pixels,
+        .solid_fast_pixels = profile.fine_profile.solid_fast_pixels,
+        .opaque_write_pixels = profile.fine_profile.opaque_write_pixels,
+        .rect_fast_calls = profile.fine_profile.rect_fast_calls,
+        .rect_fast_pixels = profile.fine_profile.rect_fast_pixels,
+    };
+}
+
+fn addProfileDurations(total: *ProfileStats, profile: ProfileStats) void {
+    total.bin_ns += profile.bin_ns;
+    total.coarse_ns += profile.coarse_ns;
+    total.texture_views_ns += profile.texture_views_ns;
+    total.fine_ns += profile.fine_ns;
+    total.clear_ns += profile.clear_ns;
+    total.boundary_index_ns += profile.boundary_index_ns;
+    total.boundary_alpha_ns += profile.boundary_alpha_ns;
+    total.boundary_composite_ns += profile.boundary_composite_ns;
+    total.solid_scan_ns += profile.solid_scan_ns;
+    total.solid_composite_ns += profile.solid_composite_ns;
+}
+
+fn averageProfile(total: ProfileStats, last: ProfileStats) ProfileStats {
+    return .{
+        .bin_ns = average(total.bin_ns),
+        .coarse_ns = average(total.coarse_ns),
+        .texture_views_ns = average(total.texture_views_ns),
+        .fine_ns = average(total.fine_ns),
+        .clear_ns = average(total.clear_ns),
+        .boundary_index_ns = average(total.boundary_index_ns),
+        .boundary_alpha_ns = average(total.boundary_alpha_ns),
+        .boundary_composite_ns = average(total.boundary_composite_ns),
+        .solid_scan_ns = average(total.solid_scan_ns),
+        .solid_composite_ns = average(total.solid_composite_ns),
+        .boundary_tiles = last.boundary_tiles,
+        .solid_tiles = last.solid_tiles,
+        .boundary_pixels = last.boundary_pixels,
+        .solid_pixels = last.solid_pixels,
+        .composite_pixels = last.composite_pixels,
+        .solid_fast_pixels = last.solid_fast_pixels,
+        .opaque_write_pixels = last.opaque_write_pixels,
+        .rect_fast_calls = last.rect_fast_calls,
+        .rect_fast_pixels = last.rect_fast_pixels,
+    };
+}
+
 fn bytesOf(comptime T: type, count: usize) usize {
     return @sizeOf(T) * count;
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\n");
 }
 
-fn printResult(scene_name: []const u8, backend_name: []const u8, result: Result) void {
+fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: []const u8, result: Result) void {
     _ = std.c.printf(
-        "%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(backend_name.len)),
         cString(backend_name),
+        @as(c_int, @intCast(timing_scope.len)),
+        cString(timing_scope),
         u64ForPrint(measured_iterations),
         u64ForPrint(result.replay_ns),
         u64ForPrint(result.build_ns),
@@ -245,6 +339,25 @@ fn printResult(scene_name: []const u8, backend_name: []const u8, result: Result)
         u64ForPrint(result.stats.indices),
         u64ForPrint(result.stats.draw_ops),
         u64ForPrint(result.stats.buffer_bytes),
+        u64ForPrint(result.profile.bin_ns),
+        u64ForPrint(result.profile.coarse_ns),
+        u64ForPrint(result.profile.texture_views_ns),
+        u64ForPrint(result.profile.fine_ns),
+        u64ForPrint(result.profile.clear_ns),
+        u64ForPrint(result.profile.boundary_index_ns),
+        u64ForPrint(result.profile.boundary_alpha_ns),
+        u64ForPrint(result.profile.boundary_composite_ns),
+        u64ForPrint(result.profile.solid_scan_ns),
+        u64ForPrint(result.profile.solid_composite_ns),
+        u64ForPrint(result.profile.boundary_tiles),
+        u64ForPrint(result.profile.solid_tiles),
+        u64ForPrint(result.profile.boundary_pixels),
+        u64ForPrint(result.profile.solid_pixels),
+        u64ForPrint(result.profile.composite_pixels),
+        u64ForPrint(result.profile.solid_fast_pixels),
+        u64ForPrint(result.profile.opaque_write_pixels),
+        u64ForPrint(result.profile.rect_fast_calls),
+        u64ForPrint(result.profile.rect_fast_pixels),
     );
 }
 
