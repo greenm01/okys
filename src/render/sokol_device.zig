@@ -39,9 +39,11 @@ pub const SparseFineParams = sparse_fine_shader.FineParams;
 pub const sparse_clear_surface_view_slot = sparse_fine_shader.VIEW_clear_surface_img;
 pub const sparse_calls_view_slot = sparse_fine_shader.VIEW_calls_buf;
 pub const sparse_segments_view_slot = sparse_fine_shader.VIEW_segments_buf;
+pub const sparse_clips_view_slot = sparse_fine_shader.VIEW_clips_buf;
 pub const sparse_tasks_view_slot = sparse_fine_shader.VIEW_tasks_buf;
 pub const sparse_fine_surface_view_slot = sparse_fine_shader.VIEW_fine_surface_img;
 pub const sparse_image_view_slot = sparse_fine_shader.VIEW_image_tex;
+pub const sparse_clip_indices_view_slot = sparse_fine_shader.VIEW_clip_indices_buf;
 pub const sparse_image_sampler_slot = sparse_fine_shader.SMP_image_smp;
 pub const sparse_clear_params_slot = sparse_fine_shader.UB_clear_params;
 pub const sparse_fine_params_slot = sparse_fine_shader.UB_fine_params;
@@ -219,6 +221,8 @@ pub const Device = struct {
     sparse_surface_height: u32 = 0,
     sparse_call_buffer: StorageBufferResource = .{},
     sparse_segment_buffer: StorageBufferResource = .{},
+    sparse_clip_buffer: StorageBufferResource = .{},
+    sparse_clip_index_buffer: StorageBufferResource = .{},
     sparse_task_buffer: StorageBufferResource = .{},
 
     pub fn initOwned(desc: Desc) Device {
@@ -433,6 +437,8 @@ pub const Device = struct {
 
         const upload_start = nowNs();
         uploadStorageBuffer(gpu_fine.GpuCall, self.sparse_call_buffer.buffer, packet.calls.items);
+        uploadStorageBuffer(gpu_fine.GpuClip, self.sparse_clip_buffer.buffer, packet.clips.items);
+        uploadStorageBuffer(gpu_fine.GpuClipIndex, self.sparse_clip_index_buffer.buffer, packet.clip_indices.items);
         uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
         uploadStorageBuffer(sparse_encode.Segment, self.sparse_segment_buffer.buffer, segments);
         timing.upload_ns = elapsedSince(upload_start);
@@ -455,7 +461,9 @@ pub const Device = struct {
             sg.applyBindings(sparseFineBindings(
                 self.sparse_call_buffer.view,
                 self.sparse_segment_buffer.view,
+                self.sparse_clip_buffer.view,
                 self.sparse_task_buffer.view,
+                self.sparse_clip_index_buffer.view,
                 self.sparse_surface_storage_view,
                 texture.view,
                 self.path_texture_sampler,
@@ -905,6 +913,8 @@ pub const Device = struct {
 
         self.ensureStorageBuffer(&self.sparse_call_buffer, bytesFor(gpu_fine.GpuCall, packet.calls.items.len), "okys_sparse_calls");
         self.ensureStorageBuffer(&self.sparse_segment_buffer, bytesFor(sparse_encode.Segment, segments.len), "okys_sparse_segments");
+        self.ensureStorageBuffer(&self.sparse_clip_buffer, bytesFor(gpu_fine.GpuClip, packet.clips.items.len), "okys_sparse_clips");
+        self.ensureStorageBuffer(&self.sparse_clip_index_buffer, bytesFor(gpu_fine.GpuClipIndex, packet.clip_indices.items.len), "okys_sparse_clip_indices");
         self.ensureStorageBuffer(&self.sparse_task_buffer, bytesFor(gpu_fine.GpuFineTask, packet.tasks.items.len), "okys_sparse_fine_tasks");
         self.ensureSparseSurface(surface_width, surface_height);
     }
@@ -939,6 +949,8 @@ pub const Device = struct {
     fn destroySparseFineResources(self: *Device) void {
         self.destroySparseSurface();
         destroyStorageBuffer(&self.sparse_task_buffer);
+        destroyStorageBuffer(&self.sparse_clip_index_buffer);
+        destroyStorageBuffer(&self.sparse_clip_buffer);
         destroyStorageBuffer(&self.sparse_segment_buffer);
         destroyStorageBuffer(&self.sparse_call_buffer);
         if (self.sparse_fine_pipeline.id != 0) {
@@ -1126,7 +1138,9 @@ pub fn sparseClearBindings(surface_view: View) Bindings {
 pub fn sparseFineBindings(
     calls_view: View,
     segments_view: View,
+    clips_view: View,
     tasks_view: View,
+    clip_indices_view: View,
     surface_view: View,
     image_view: View,
     image_sampler: Sampler,
@@ -1134,7 +1148,9 @@ pub fn sparseFineBindings(
     var bindings: Bindings = .{};
     bindings.views[sparse_calls_view_slot] = calls_view;
     bindings.views[sparse_segments_view_slot] = segments_view;
+    bindings.views[sparse_clips_view_slot] = clips_view;
     bindings.views[sparse_tasks_view_slot] = tasks_view;
+    bindings.views[sparse_clip_indices_view_slot] = clip_indices_view;
     bindings.views[sparse_fine_surface_view_slot] = surface_view;
     bindings.views[sparse_image_view_slot] = image_view;
     bindings.samplers[sparse_image_sampler_slot] = image_sampler;
@@ -1407,6 +1423,8 @@ fn blitQuad(dest: BlitRect) [4]BlitVertex {
 
 comptime {
     std.debug.assert(@sizeOf(gpu_fine.GpuCall) == @sizeOf(sparse_fine_shader.Gpucall));
+    std.debug.assert(@sizeOf(gpu_fine.GpuClip) == @sizeOf(sparse_fine_shader.Gpuclip));
+    std.debug.assert(@sizeOf(gpu_fine.GpuClipIndex) == @sizeOf(sparse_fine_shader.Gpuclipindex));
     std.debug.assert(@sizeOf(gpu_fine.GpuFineTask) == @sizeOf(sparse_fine_shader.Gpufinetask));
     std.debug.assert(@sizeOf(sparse_encode.Segment) == @sizeOf(sparse_fine_shader.Segment));
 }

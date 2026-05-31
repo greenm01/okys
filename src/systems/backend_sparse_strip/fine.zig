@@ -74,6 +74,8 @@ pub fn build(
     viewport_height: f32,
     calls: []const encode.EncodedCall,
     segments: []const encode.Segment,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
     strip_segment_indices: []const u32,
     textures: []const Texture,
     strips: *std.ArrayList(strip.Strip),
@@ -131,6 +133,8 @@ pub fn build(
                 call_fill_rule,
                 textures,
                 segments,
+                clips,
+                call_clip_indices,
                 alphas,
                 s,
                 width,
@@ -146,6 +150,8 @@ pub fn build(
             call_fill_rule,
             textures,
             segments,
+            clips,
+            call_clip_indices,
             &boundary_tiles,
             width,
             height,
@@ -164,6 +170,8 @@ fn renderBoundaryStrip(
     fill_rule: strip.FillRule,
     textures: []const Texture,
     segments: []const encode.Segment,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
     alphas: *std.ArrayList(u8),
     s: *strip.Strip,
     width: u32,
@@ -186,7 +194,7 @@ fn renderBoundaryStrip(
                 call.segments,
                 segments,
             );
-            try alphas.append(gpa, alpha);
+            try alphas.append(gpa, applyClipAlpha(alpha, call, clips, call_clip_indices, segments, s.x + local_x, s.y + local_y));
         }
     }
     if (profile) |p| {
@@ -241,6 +249,8 @@ fn renderSolidInterior(
     fill_rule: strip.FillRule,
     textures: []const Texture,
     segments: []const encode.Segment,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
     boundary_tiles: *const BoundarySet,
     width: u32,
     height: u32,
@@ -270,7 +280,9 @@ fn renderSolidInterior(
             if (profile) |p| p.solid_scan_ns += elapsedSince(scan_start);
 
             const composite_start = profileStart(profile);
-            const result = if (solid) |sp|
+            const result = if (call.clips.count > 0)
+                compositeClippedTile(call, textures, clips, call_clip_indices, segments, solid, strip.tileOrigin(@intCast(tile_x)), strip.tileOrigin(@intCast(tile_y)), width, height, surface)
+            else if (solid) |sp|
                 compositeSolidTile(sp, strip.tileOrigin(@intCast(tile_x)), strip.tileOrigin(@intCast(tile_y)), width, height, surface)
             else
                 compositeGenericTile(call, textures, strip.tileOrigin(@intCast(tile_x)), strip.tileOrigin(@intCast(tile_y)), width, height, surface);
@@ -413,6 +425,39 @@ fn compositeGenericTile(
     return result;
 }
 
+fn compositeClippedTile(
+    call: encode.EncodedCall,
+    textures: []const Texture,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
+    segments: []const encode.Segment,
+    solid: ?SolidPaint,
+    x: u16,
+    y: u16,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) TileCompositeResult {
+    var result: TileCompositeResult = .{};
+    var local_y: u16 = 0;
+    while (local_y < strip.tile_size) : (local_y += 1) {
+        var local_x: u16 = 0;
+        while (local_x < strip.tile_size) : (local_x += 1) {
+            const px = x + local_x;
+            const py = y + local_y;
+            const alpha = clipAlpha(call, clips, call_clip_indices, segments, px, py);
+            if (solid) |sp| {
+                const pixel = compositeSolidAlphaFillPixel(sp, alpha, px, py, width, height, surface);
+                if (pixel.touched) result.touched += 1;
+                if (pixel.opaque_write) result.opaque_writes += 1;
+            } else if (compositePaint(call, textures, alpha, px, py, width, height, surface)) {
+                result.touched += 1;
+            }
+        }
+    }
+    return result;
+}
+
 fn appendRectTileAlpha(gpa: std.mem.Allocator, rect: Rect, tile_x: u16, tile_y: u16, alphas: *std.ArrayList(u8)) !void {
     var local_y: u16 = 0;
     while (local_y < strip.tile_size) : (local_y += 1) {
@@ -480,6 +525,41 @@ fn pixelCoverageForCall(
         area += segmentArea(px, py, seg);
     }
     return areaToAlpha(fill_rule, area);
+}
+
+fn applyClipAlpha(
+    alpha: u8,
+    call: encode.EncodedCall,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
+    segments: []const encode.Segment,
+    x: u16,
+    y: u16,
+) u8 {
+    if (alpha == 0 or call.clips.count == 0) return alpha;
+    const clip_alpha = clipAlpha(call, clips, call_clip_indices, segments, x, y);
+    return normToU8(u8ToNorm(alpha) * u8ToNorm(clip_alpha));
+}
+
+fn clipAlpha(
+    call: encode.EncodedCall,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
+    segments: []const encode.Segment,
+    x: u16,
+    y: u16,
+) u8 {
+    var mask: f32 = 1;
+    const start: usize = @intCast(call.clips.start);
+    const count: usize = @intCast(call.clips.count);
+    for (call_clip_indices[start..][0..count]) |clip_index| {
+        if (clip_index >= clips.len) return 0;
+        const clip = clips[clip_index];
+        if (clip.segments.count == 0) return 0;
+        mask *= u8ToNorm(pixelCoverageForCall(clip.rule, x, y, clip.segments, segments));
+        if (mask <= 0) return 0;
+    }
+    return normToU8(mask);
 }
 
 fn coverageAtForCall(
@@ -651,6 +731,7 @@ fn scissorDisabled(scissor: *const color.Scissor) bool {
 }
 
 fn rectForCall(call: encode.EncodedCall, segments: []const encode.Segment) ?Rect {
+    if (call.clips.count > 0) return null;
     if (call.kind != .fill or !call.convex or call.segments.count != 4) return null;
     const bounds = callBounds(call, segments);
     if (bounds[0] >= bounds[2] or bounds[1] >= bounds[3]) return null;

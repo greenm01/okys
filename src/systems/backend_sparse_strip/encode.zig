@@ -5,10 +5,17 @@ const color = @import("../../types/color.zig");
 const Paint = color.Paint;
 const Scissor = color.Scissor;
 const path = @import("../../types/path.zig");
+const ClipRule = path.ClipRule;
 const PathRange = path.PathRange;
 const Point = path.Point;
 const Vertex = path.Vertex;
 const strip = @import("strip.zig");
+
+pub const ClipRecord = struct {
+    rule: strip.FillRule = .nonzero,
+    bounds: [4]f32 = .{ 0, 0, 0, 0 },
+    segments: strip.Range = .{},
+};
 
 pub const EncodedCall = struct {
     kind: strip.CallKind,
@@ -17,6 +24,7 @@ pub const EncodedCall = struct {
     bounds: [4]f32 = .{ 0, 0, 0, 0 },
     width: f32 = 0,
     segments: strip.Range = .{},
+    clips: strip.Range = .{},
     convex: bool = false,
 };
 
@@ -90,6 +98,13 @@ pub fn appendTriangleSegments(
 
 fn validPath(p: PathRange, point_len: usize) bool {
     return p.closed and p.point_count >= 3 and @as(usize, p.point_start) + @as(usize, p.point_count) <= point_len;
+}
+
+pub fn fillRuleForClip(rule: ClipRule) strip.FillRule {
+    return switch (rule) {
+        .nonzero => .nonzero,
+        .even_odd => .even_odd,
+    };
 }
 
 fn samePoint(a: Point, b: Point) bool {

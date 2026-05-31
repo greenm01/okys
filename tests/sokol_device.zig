@@ -133,17 +133,21 @@ test "sparse compute descriptors use storage resources and generated slots" {
 
     const calls = sokol_device.View{ .id = 1 };
     const segments = sokol_device.View{ .id = 2 };
+    const clips = sokol_device.View{ .id = 3 };
     const tasks = sokol_device.View{ .id = 4 };
+    const clip_indices = sokol_device.View{ .id = 8 };
     const surface = sokol_device.View{ .id = 5 };
     const image = sokol_device.View{ .id = 6 };
     const sampler = sokol_device.Sampler{ .id = 7 };
     const clear_bindings = sokol_device.sparseClearBindings(surface);
     try testing.expectEqual(surface, clear_bindings.views[sokol_device.sparse_clear_surface_view_slot]);
 
-    const fine_bindings = sokol_device.sparseFineBindings(calls, segments, tasks, surface, image, sampler);
+    const fine_bindings = sokol_device.sparseFineBindings(calls, segments, clips, tasks, clip_indices, surface, image, sampler);
     try testing.expectEqual(calls, fine_bindings.views[sokol_device.sparse_calls_view_slot]);
     try testing.expectEqual(segments, fine_bindings.views[sokol_device.sparse_segments_view_slot]);
+    try testing.expectEqual(clips, fine_bindings.views[sokol_device.sparse_clips_view_slot]);
     try testing.expectEqual(tasks, fine_bindings.views[sokol_device.sparse_tasks_view_slot]);
+    try testing.expectEqual(clip_indices, fine_bindings.views[sokol_device.sparse_clip_indices_view_slot]);
     try testing.expectEqual(surface, fine_bindings.views[sokol_device.sparse_fine_surface_view_slot]);
     try testing.expectEqual(image, fine_bindings.views[sokol_device.sparse_image_view_slot]);
     try testing.expectEqual(sampler, fine_bindings.samplers[sokol_device.sparse_image_sampler_slot]);

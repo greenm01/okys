@@ -24,6 +24,7 @@ pub const gpu_fine = @import("gpu_fine.zig");
 pub const strip = @import("strip.zig");
 
 pub const EncodedCall = encode.EncodedCall;
+pub const ClipRecord = encode.ClipRecord;
 pub const Segment = encode.Segment;
 pub const Strip = strip.Strip;
 pub const TileRef = strip.TileRef;
@@ -48,6 +49,8 @@ pub const Profile = struct {
 
 pub const FramePacketStats = struct {
     calls: usize = 0,
+    clips: usize = 0,
+    clip_indices: usize = 0,
     segments: usize = 0,
     tile_refs: usize = 0,
     strips: usize = 0,
@@ -56,6 +59,8 @@ pub const FramePacketStats = struct {
     surface_bytes: usize = 0,
     texture_bytes: usize = 0,
     calls_bytes: usize = 0,
+    clips_bytes: usize = 0,
+    clip_indices_bytes: usize = 0,
     segments_bytes: usize = 0,
     tile_refs_bytes: usize = 0,
     strips_bytes: usize = 0,
@@ -109,6 +114,9 @@ const SparseTexture = struct {
 pub const Backend = struct {
     gpa: std.mem.Allocator,
     calls: std.ArrayList(EncodedCall) = .empty,
+    clips: std.ArrayList(ClipRecord) = .empty,
+    active_clip_stack: std.ArrayList(u32) = .empty,
+    call_clip_indices: std.ArrayList(u32) = .empty,
     segments: std.ArrayList(Segment) = .empty,
     tiles: std.ArrayList(TileRef) = .empty,
     strips: std.ArrayList(Strip) = .empty,
@@ -141,6 +149,9 @@ pub const Backend = struct {
     pub fn destroy(self: *Backend) void {
         const gpa = self.gpa;
         self.calls.deinit(gpa);
+        self.clips.deinit(gpa);
+        self.active_clip_stack.deinit(gpa);
+        self.call_clip_indices.deinit(gpa);
         self.segments.deinit(gpa);
         self.tiles.deinit(gpa);
         self.strips.deinit(gpa);
@@ -206,6 +217,8 @@ pub const Backend = struct {
             self.viewport_height,
             self.calls.items,
             self.segments.items,
+            self.clips.items,
+            self.call_clip_indices.items,
             self.strip_segment_indices.items,
             self.texture_views.items,
             &self.strips,
@@ -240,6 +253,8 @@ pub const Backend = struct {
             self.viewport_height,
             self.calls.items,
             self.segments.items,
+            self.clips.items,
+            self.call_clip_indices.items,
             self.strip_segment_indices.items,
             self.strips.items,
             packet,
@@ -253,6 +268,9 @@ pub const Backend = struct {
 
     pub fn clearQueued(self: *Backend) void {
         self.calls.clearRetainingCapacity();
+        self.clips.clearRetainingCapacity();
+        self.active_clip_stack.clearRetainingCapacity();
+        self.call_clip_indices.clearRetainingCapacity();
         self.segments.clearRetainingCapacity();
         self.tiles.clearRetainingCapacity();
         self.strips.clearRetainingCapacity();
@@ -264,6 +282,10 @@ pub const Backend = struct {
         const call_index: u32 = @intCast(self.calls.items.len);
         const range = encode.appendPathSegments(&self.segments, self.gpa, call_index, paths, points) catch return;
         if (range.count == 0) return;
+        const clip_range = self.snapshotActiveClips() catch {
+            self.segments.shrinkRetainingCapacity(@intCast(range.start));
+            return;
+        };
         self.calls.append(self.gpa, .{
             .kind = kind,
             .paint = paint.*,
@@ -271,10 +293,18 @@ pub const Backend = struct {
             .bounds = bounds,
             .width = width,
             .segments = range,
+            .clips = clip_range,
             .convex = singleConvexPath(paths, points.len),
         }) catch {
+            self.call_clip_indices.shrinkRetainingCapacity(@intCast(clip_range.start));
             self.segments.shrinkRetainingCapacity(@intCast(range.start));
         };
+    }
+
+    fn snapshotActiveClips(self: *Backend) !strip.Range {
+        const start = self.call_clip_indices.items.len;
+        try self.call_clip_indices.appendSlice(self.gpa, self.active_clip_stack.items);
+        return .{ .start = @intCast(start), .count = @intCast(self.active_clip_stack.items.len) };
     }
 
     fn rebuildTextureViews(self: *Backend) !void {
@@ -298,11 +328,15 @@ pub const Backend = struct {
         const pressure = pressureStats(self.calls.items, self.tiles.items, self.strips.items);
 
         const calls_bytes = bytesOf(EncodedCall, self.calls.items.len);
+        const clips_bytes = bytesOf(ClipRecord, self.clips.items.len);
+        const call_clip_indices_bytes = bytesOf(u32, self.call_clip_indices.items.len);
         const segments_bytes = bytesOf(Segment, self.segments.items.len);
         const tile_refs_bytes = bytesOf(TileRef, self.tiles.items.len);
         const strips_bytes = bytesOf(Strip, self.strips.items.len);
         const strip_indices_bytes = bytesOf(u32, self.strip_segment_indices.items.len);
         const frame_packet_bytes = calls_bytes +
+            clips_bytes +
+            call_clip_indices_bytes +
             segments_bytes +
             tile_refs_bytes +
             strips_bytes +
@@ -311,6 +345,8 @@ pub const Backend = struct {
             self.surface.items.len +
             texture_bytes;
         const packet_capacity_bytes = capacityBytes(EncodedCall, self.calls.capacity) +
+            capacityBytes(ClipRecord, self.clips.capacity) +
+            capacityBytes(u32, self.call_clip_indices.capacity) +
             capacityBytes(Segment, self.segments.capacity) +
             capacityBytes(TileRef, self.tiles.capacity) +
             capacityBytes(Strip, self.strips.capacity) +
@@ -321,6 +357,8 @@ pub const Backend = struct {
 
         return .{
             .calls = self.calls.items.len,
+            .clips = self.clips.items.len,
+            .clip_indices = self.call_clip_indices.items.len,
             .segments = self.segments.items.len,
             .tile_refs = self.tiles.items.len,
             .strips = self.strips.items.len,
@@ -329,6 +367,8 @@ pub const Backend = struct {
             .surface_bytes = self.surface.items.len,
             .texture_bytes = texture_bytes,
             .calls_bytes = calls_bytes,
+            .clips_bytes = clips_bytes,
+            .clip_indices_bytes = call_clip_indices_bytes,
             .segments_bytes = segments_bytes,
             .tile_refs_bytes = tile_refs_bytes,
             .strips_bytes = strips_bytes,
@@ -671,6 +711,8 @@ fn viewport(ctx: *anyopaque, width: f32, height: f32, dpr: f32) void {
     self.viewport_width = width;
     self.viewport_height = height;
     self.viewport_dpr = if (dpr > 0) dpr else 1;
+    self.active_clip_stack.clearRetainingCapacity();
+    self.clip_depth = 0;
 }
 
 fn renderFlush(ctx: *anyopaque) void {
@@ -695,20 +737,46 @@ fn triangles(ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, vert
     const call_index: u32 = @intCast(self.calls.items.len);
     const range = encode.appendTriangleSegments(&self.segments, self.gpa, call_index, verts) catch return;
     if (range.count == 0) return;
+    const clip_range = self.snapshotActiveClips() catch {
+        self.segments.shrinkRetainingCapacity(@intCast(range.start));
+        return;
+    };
     self.calls.append(self.gpa, .{
         .kind = .triangles,
         .paint = paint.*,
         .scissor = scissor.*,
         .segments = range,
+        .clips = clip_range,
     }) catch {
+        self.call_clip_indices.shrinkRetainingCapacity(@intCast(clip_range.start));
         self.segments.shrinkRetainingCapacity(@intCast(range.start));
     };
 }
 
 fn pushClipPath(ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) void {
     const self = from(ctx);
+    const segment_start = self.segments.items.len;
+    const range = encode.appendPathSegments(&self.segments, self.gpa, 0, paths, points) catch return;
+    if (range.count == 0) {
+        self.segments.shrinkRetainingCapacity(@intCast(segment_start));
+        return;
+    }
+    const clip_index: u32 = @intCast(self.clips.items.len);
+    self.clips.append(self.gpa, .{
+        .rule = encode.fillRuleForClip(rule),
+        .bounds = bounds,
+        .segments = range,
+    }) catch {
+        self.segments.shrinkRetainingCapacity(@intCast(segment_start));
+        return;
+    };
+    self.active_clip_stack.append(self.gpa, clip_index) catch {
+        _ = self.clips.pop();
+        self.segments.shrinkRetainingCapacity(@intCast(segment_start));
+        return;
+    };
     self.clip_push_count += 1;
-    self.clip_depth += 1;
+    self.clip_depth = self.active_clip_stack.items.len;
     self.max_clip_depth = @max(self.max_clip_depth, self.clip_depth);
     self.last_clip_rule = rule;
     self.last_clip_bounds = bounds;
@@ -719,7 +787,8 @@ fn pushClipPath(ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const 
 fn popClipPath(ctx: *anyopaque) void {
     const self = from(ctx);
     self.clip_pop_count += 1;
-    self.clip_depth -|= 1;
+    if (self.active_clip_stack.items.len > 0) _ = self.active_clip_stack.pop();
+    self.clip_depth = self.active_clip_stack.items.len;
 }
 
 fn singleConvexPath(paths: []const PathRange, point_len: usize) bool {

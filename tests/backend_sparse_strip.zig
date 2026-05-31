@@ -134,6 +134,8 @@ test "sparse profiled build reports fine-stage work counters" {
 
     const packet = profile.frame_packet;
     try testing.expectEqual(backend.calls.items.len, packet.calls);
+    try testing.expectEqual(backend.clips.items.len, packet.clips);
+    try testing.expectEqual(backend.call_clip_indices.items.len, packet.clip_indices);
     try testing.expectEqual(backend.segments.items.len, packet.segments);
     try testing.expectEqual(backend.tiles.items.len, packet.tile_refs);
     try testing.expectEqual(backend.strips.items.len, packet.strips);
@@ -142,6 +144,8 @@ test "sparse profiled build reports fine-stage work counters" {
     try testing.expectEqual(backend.surface.items.len, packet.surface_bytes);
     try testing.expectEqual(@as(usize, 0), packet.texture_bytes);
     try testing.expectEqual(@sizeOf(sparse.EncodedCall) * backend.calls.items.len, packet.calls_bytes);
+    try testing.expectEqual(@sizeOf(sparse.ClipRecord) * backend.clips.items.len, packet.clips_bytes);
+    try testing.expectEqual(@sizeOf(u32) * backend.call_clip_indices.items.len, packet.clip_indices_bytes);
     try testing.expectEqual(@sizeOf(sparse.Segment) * backend.segments.items.len, packet.segments_bytes);
     try testing.expectEqual(@sizeOf(sparse.TileRef) * backend.tiles.items.len, packet.tile_refs_bytes);
     try testing.expectEqual(@sizeOf(sparse.Strip) * backend.strips.items.len, packet.strips_bytes);
@@ -577,6 +581,126 @@ test "sparse scissor masks proof surface" {
     try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 2, 2));
 }
 
+test "sparse path clip masks solid fill" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    pushClipRect(&iface, 8, 8, 16, 16, .nonzero);
+    queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 0, 0, 24, 24);
+    iface.pop_clip_path(iface.ctx);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual(@as(usize, 1), backend.clips.items.len);
+    try testing.expectEqual(@as(u32, 0), backend.calls.items[0].clips.start);
+    try testing.expectEqual(@as(u32, 1), backend.calls.items[0].clips.count);
+    try testing.expectEqual([4]u8{ 255, 0, 0, 255 }, rgbaAt(backend, 10, 10));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 6, 10));
+}
+
+test "sparse nested path clips intersect" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    pushClipRect(&iface, 4, 4, 24, 24, .nonzero);
+    pushClipRect(&iface, 12, 4, 24, 24, .nonzero);
+    queuePaintedRect(&iface, color.rgbaf(0, 1, 0, 1), 0, 0, 28, 28);
+    iface.pop_clip_path(iface.ctx);
+    iface.pop_clip_path(iface.ctx);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual(@as(usize, 2), backend.clips.items.len);
+    try testing.expectEqual(@as(u32, 2), backend.calls.items[0].clips.count);
+    try testing.expectEqual([4]u8{ 0, 255, 0, 255 }, rgbaAt(backend, 14, 10));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 8, 10));
+}
+
+test "sparse even odd path clip cuts a hole" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const clip_points = [_]Point{
+        .{ .x = 4, .y = 4 },
+        .{ .x = 24, .y = 4 },
+        .{ .x = 24, .y = 24 },
+        .{ .x = 4, .y = 24 },
+        .{ .x = 10, .y = 10 },
+        .{ .x = 18, .y = 10 },
+        .{ .x = 18, .y = 18 },
+        .{ .x = 10, .y = 18 },
+    };
+    const clip_paths = [_]PathRange{
+        .{ .point_start = 0, .point_count = 4, .closed = true, .convex = false },
+        .{ .point_start = 4, .point_count = 4, .closed = true, .convex = false },
+    };
+    iface.push_clip_path(iface.ctx, .even_odd, .{ 4, 4, 24, 24 }, &clip_paths, &clip_points);
+    queuePaintedRect(&iface, color.rgbaf(1, 1, 1, 1), 0, 0, 28, 28);
+    iface.pop_clip_path(iface.ctx);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual(.even_odd, backend.last_clip_rule);
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, rgbaAt(backend, 6, 6));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 14, 14));
+}
+
+test "sparse path clip multiplies with rectangular scissor" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const scissor: color.Scissor = .{
+        .xform = .{ 1, 0, 0, 1, 14, 14 },
+        .extent = .{ 6, 6 },
+    };
+    pushClipRect(&iface, 4, 4, 18, 18, .nonzero);
+    queuePaintRect(&iface, color.solid(color.rgbaf(1, 0, 1, 1)), 0, 0, 28, 28, scissor);
+    iface.pop_clip_path(iface.ctx);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 255, 0, 255, 255 }, rgbaAt(backend, 14, 14));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 20, 14));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 8, 20));
+}
+
+test "sparse path clip masks stroke and triangle calls" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    pushClipRect(&iface, 8, 8, 20, 20, .nonzero);
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const stroke_points = [_]Point{
+        .{ .x = 4, .y = 4 },
+        .{ .x = 24, .y = 4 },
+        .{ .x = 24, .y = 24 },
+        .{ .x = 4, .y = 24 },
+    };
+    const stroke_paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
+    iface.stroke(iface.ctx, &paint, &disabled_scissor, 3, &stroke_paths, &stroke_points);
+
+    const verts = [_]Vertex{
+        .{ .x = 4, .y = 4, .u = 0, .v = 0 },
+        .{ .x = 24, .y = 4, .u = 0, .v = 0 },
+        .{ .x = 4, .y = 24, .u = 0, .v = 0 },
+    };
+    iface.triangles(iface.ctx, &paint, &disabled_scissor, &verts);
+    iface.pop_clip_path(iface.ctx);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual(@as(usize, 2), backend.calls.items.len);
+    try testing.expectEqual(@as(u32, 1), backend.calls.items[0].clips.count);
+    try testing.expectEqual(@as(u32, 1), backend.calls.items[1].clips.count);
+    try testing.expect(rgbaAt(backend, 10, 10)[3] > 0);
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 5, 5));
+}
+
 test "sparse gradient composites over solid fill in draw order" {
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
@@ -761,6 +885,17 @@ fn queuePaintRect(iface: *const okys.render.interface.RenderInterface, paint: co
     };
     const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
     iface.fill(iface.ctx, &paint, &scissor, .{ x0, y0, x1, y1 }, &paths, &points);
+}
+
+fn pushClipRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f32, x1: f32, y1: f32, rule: okys.types.path.ClipRule) void {
+    const points = [_]Point{
+        .{ .x = x0, .y = y0 },
+        .{ .x = x1, .y = y0 },
+        .{ .x = x1, .y = y1 },
+        .{ .x = x0, .y = y1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
+    iface.push_clip_path(iface.ctx, rule, .{ x0, y0, x1, y1 }, &paths, &points);
 }
 
 fn alphaAt(backend: *const Backend, s: sparse.Strip, x: u16, y: u16) u8 {

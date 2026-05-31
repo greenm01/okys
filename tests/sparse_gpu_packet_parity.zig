@@ -121,6 +121,61 @@ test "GPU packet simulator matches sparse CPU proof for gradient image scissor a
     try expectPacketMatchesCpu(backend, 4);
 }
 
+test "GPU packet simulator matches sparse CPU proof for nested path clips" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 48, 40, 1);
+
+    pushClipRect(&iface, 6, 6, 40, 32, .nonzero);
+    pushClipRect(&iface, 16, 6, 40, 32, .nonzero);
+    const paint = color.solid(color.rgbaf(0.2, 0.9, 0.4, 0.85));
+    const points = roundedRectPoints(2.5, 2.5, 44.5, 34.5, 7);
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = points.len, .closed = true, .convex = false }};
+    iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 2.5, 2.5, 44.5, 34.5 }, &paths, &points);
+    iface.pop_clip_path(iface.ctx);
+    iface.pop_clip_path(iface.ctx);
+
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(@as(usize, 2), packet.clips.items.len);
+    try testing.expectEqual(@as(usize, 2), packet.clip_indices.items.len);
+    try testing.expectEqual(@as(u32, 2), packet.calls.items[0].clip_count);
+    try expectPacketMatchesCpu(backend, 4);
+}
+
+test "GPU packet simulator matches sparse CPU proof for even odd path clip" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 48, 40, 1);
+
+    const clip_points = [_]Point{
+        .{ .x = 4, .y = 4 },
+        .{ .x = 42, .y = 4 },
+        .{ .x = 42, .y = 34 },
+        .{ .x = 4, .y = 34 },
+        .{ .x = 16, .y = 12 },
+        .{ .x = 30, .y = 12 },
+        .{ .x = 30, .y = 26 },
+        .{ .x = 16, .y = 26 },
+    };
+    const clip_paths = [_]PathRange{
+        .{ .point_start = 0, .point_count = 4, .closed = true, .convex = false },
+        .{ .point_start = 4, .point_count = 4, .closed = true, .convex = false },
+    };
+    iface.push_clip_path(iface.ctx, .even_odd, .{ 4, 4, 42, 34 }, &clip_paths, &clip_points);
+    queueRect(&iface, 0, 0, 46, 38);
+    iface.pop_clip_path(iface.ctx);
+
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(@intFromEnum(sparse.FillRule.even_odd), packet.clips.items[0].fill_rule);
+    try expectPacketMatchesCpu(backend, 2);
+}
+
 test "GPU packet alpha-fill tasks use full call segment ranges" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
@@ -203,7 +258,7 @@ fn simulateGpuPacket(
         const start: usize = @intCast(call.task_start);
         const count: usize = @intCast(call.task_count);
         for (packet.tasks.items[start..][0..count]) |task| {
-            simulateTask(width, height, call, task, segments, textures, surface);
+            simulateTask(width, height, call, task, packet.clips.items, packet.clip_indices.items, segments, textures, surface);
         }
     }
 
@@ -215,6 +270,8 @@ fn simulateTask(
     height: u32,
     call: sparse.gpu_fine.GpuCall,
     task: sparse.gpu_fine.GpuFineTask,
+    clips: []const sparse.gpu_fine.GpuClip,
+    clip_indices: []const sparse.gpu_fine.GpuClipIndex,
     segments: []const sparse.Segment,
     textures: []const sparse.fine.Texture,
     surface: []u8,
@@ -244,6 +301,8 @@ fn simulateTask(
                 alpha *= scissorMask(call, sample_pos);
                 if (alpha <= 0) continue;
             }
+            alpha *= clipMask(call, clips, clip_indices, segments, x, y);
+            if (alpha <= 0) continue;
 
             const paint = resolvePaint(call, textures, sample_pos);
             const src = ColorF{
@@ -288,6 +347,26 @@ fn scissorMask(call: sparse.gpu_fine.GpuCall, p: [2]f32) f32 {
     sx = 0.5 - sx * call.scissor_extent_scale[2];
     sy = 0.5 - sy * call.scissor_extent_scale[3];
     return std.math.clamp(sx, 0, 1) * std.math.clamp(sy, 0, 1);
+}
+
+fn clipMask(call: sparse.gpu_fine.GpuCall, clips: []const sparse.gpu_fine.GpuClip, clip_indices: []const sparse.gpu_fine.GpuClipIndex, segments: []const sparse.Segment, x: u32, y: u32) f32 {
+    var mask: f32 = 1;
+    const start: usize = @intCast(call.clip_start);
+    const count: usize = @intCast(call.clip_count);
+    for (clip_indices[start..][0..count]) |clip_index| {
+        if (clip_index.value >= clips.len) return 0;
+        const clip = clips[clip_index.value];
+        if (clip.segment_count == 0) return 0;
+        var area: f32 = 0;
+        const segment_start: usize = @intCast(clip.segment_start);
+        const segment_count: usize = @intCast(clip.segment_count);
+        for (segments[segment_start..][0..segment_count]) |seg| {
+            area += segmentArea(@as(f32, @floatFromInt(x)), @as(f32, @floatFromInt(y)), seg);
+        }
+        mask *= areaToAlpha(clip.fill_rule, area);
+        if (mask <= 0) return 0;
+    }
+    return mask;
 }
 
 fn matPoint(c0: [4]f32, c1: [4]f32, c2: [4]f32, p: [2]f32) [2]f32 {
@@ -484,6 +563,17 @@ fn queueRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f
     };
     const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
     iface.fill(iface.ctx, &paint, &disabled_scissor, .{ x0, y0, x1, y1 }, &paths, &points);
+}
+
+fn pushClipRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f32, x1: f32, y1: f32, rule: okys.types.path.ClipRule) void {
+    const points = [_]Point{
+        .{ .x = x0, .y = y0 },
+        .{ .x = x1, .y = y0 },
+        .{ .x = x1, .y = y1 },
+        .{ .x = x0, .y = y1 },
+    };
+    const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
+    iface.push_clip_path(iface.ctx, rule, .{ x0, y0, x1, y1 }, &paths, &points);
 }
 
 fn roundedRectPoints(x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) [16]Point {

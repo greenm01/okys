@@ -19,7 +19,21 @@ struct GpuCall {
     uint flags;
     uint fill_rule;
     uint image_id;
+    uint clip_start;
+    uint clip_count;
     uint _pad1;
+};
+
+struct GpuClip {
+    vec4 bounds;
+    uint segment_start;
+    uint segment_count;
+    uint fill_rule;
+    uint _pad0;
+};
+
+struct GpuClipIndex {
+    uint value;
 };
 
 struct Segment {
@@ -190,8 +204,16 @@ layout(binding=1) readonly buffer segments_buf {
     Segment segments[];
 };
 
+layout(binding=2) readonly buffer clips_buf {
+    GpuClip clips[];
+};
+
 layout(binding=3) readonly buffer tasks_buf {
     GpuFineTask tasks[];
+};
+
+layout(binding=6) readonly buffer clip_indices_buf {
+    GpuClipIndex clip_indices[];
 };
 
 layout(binding=4, rgba8) uniform image2D fine_surface_img;
@@ -199,6 +221,14 @@ layout(binding=5) uniform texture2D image_tex;
 layout(binding=0) uniform sampler image_smp;
 
 layout(local_size_x=8, local_size_y=4, local_size_z=1) in;
+
+float coverage_for_range(uint fill_rule, uint segment_start, uint segment_count, uint x, uint y) {
+    float area = 0.0;
+    for (uint i = 0u; i < segment_count; i += 1u) {
+        area += segment_area(float(x), float(y), segments[segment_start + i]);
+    }
+    return area_to_alpha(fill_rule, area);
+}
 
 void main() {
     uint local_x = gl_LocalInvocationID.x;
@@ -221,11 +251,7 @@ void main() {
 
     float alpha = 1.0;
     if (task.kind == 1u) {
-        float area = 0.0;
-        for (uint i = 0u; i < task.segment_count; i += 1u) {
-            area += segment_area(float(x), float(y), segments[task.segment_start + i]);
-        }
-        alpha = area_to_alpha(call.fill_rule, area);
+        alpha = coverage_for_range(call.fill_rule, task.segment_start, task.segment_count, x, y);
     }
     if (alpha <= 0.0) {
         return;
@@ -234,6 +260,17 @@ void main() {
     vec2 sample_pos = vec2(float(x) + 0.5, float(y) + 0.5);
     if (call.params.x > 0.5) {
         alpha *= scissor_mask(call, sample_pos);
+        if (alpha <= 0.0) {
+            return;
+        }
+    }
+
+    for (uint i = 0u; i < call.clip_count; i += 1u) {
+        GpuClip clip = clips[clip_indices[call.clip_start + i].value];
+        if (clip.segment_count == 0u) {
+            return;
+        }
+        alpha *= coverage_for_range(clip.fill_rule, clip.segment_start, clip.segment_count, x, y);
         if (alpha <= 0.0) {
             return;
         }

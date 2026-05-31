@@ -45,7 +45,22 @@ pub const GpuCall = extern struct {
     flags: u32 = 0,
     fill_rule: u32 = 0,
     image_id: u32 = 0,
+    clip_start: u32 = 0,
+    clip_count: u32 = 0,
     _pad1: u32 = 0,
+    _pad2: [8]u8 = .{0} ** 8,
+};
+
+pub const GpuClip = extern struct {
+    bounds: [4]f32 = .{ 0, 0, 0, 0 },
+    segment_start: u32 = 0,
+    segment_count: u32 = 0,
+    fill_rule: u32 = 0,
+    _pad0: u32 = 0,
+};
+
+pub const GpuClipIndex = extern struct {
+    value: u32 = 0,
 };
 
 pub const GpuFineTask = extern struct {
@@ -67,6 +82,8 @@ pub const PacketStats = struct {
     supported: bool = false,
     fallback_reason: FallbackReason = .none,
     calls: usize = 0,
+    clips: usize = 0,
+    clip_indices: usize = 0,
     tasks: usize = 0,
     fill_tasks: usize = 0,
     alpha_fill_tasks: usize = 0,
@@ -77,18 +94,24 @@ pub const PacketStats = struct {
 
 pub const Packet = struct {
     calls: std.ArrayList(GpuCall) = .empty,
+    clips: std.ArrayList(GpuClip) = .empty,
+    clip_indices: std.ArrayList(GpuClipIndex) = .empty,
     tasks: std.ArrayList(GpuFineTask) = .empty,
     strip_indices: std.ArrayList(GpuStripIndex) = .empty,
     stats: PacketStats = .{},
 
     pub fn deinit(self: *Packet, gpa: std.mem.Allocator) void {
         self.calls.deinit(gpa);
+        self.clips.deinit(gpa);
+        self.clip_indices.deinit(gpa);
         self.tasks.deinit(gpa);
         self.strip_indices.deinit(gpa);
     }
 
     pub fn clearRetainingCapacity(self: *Packet) void {
         self.calls.clearRetainingCapacity();
+        self.clips.clearRetainingCapacity();
+        self.clip_indices.clearRetainingCapacity();
         self.tasks.clearRetainingCapacity();
         self.strip_indices.clearRetainingCapacity();
         self.stats = .{};
@@ -104,14 +127,26 @@ pub fn build(
     viewport_height: f32,
     calls: []const encode.EncodedCall,
     segments: []const encode.Segment,
+    clips: []const encode.ClipRecord,
+    call_clip_indices: []const u32,
     strip_segment_indices: []const u32,
     strips: []const strip.Strip,
     packet: *Packet,
 ) !bool {
     packet.clearRetainingCapacity();
     packet.stats.calls = calls.len;
+    packet.stats.clips = clips.len;
+    packet.stats.clip_indices = call_clip_indices.len;
     try packet.calls.ensureTotalCapacity(gpa, calls.len);
+    try packet.clips.ensureTotalCapacity(gpa, clips.len);
+    try packet.clip_indices.ensureTotalCapacity(gpa, call_clip_indices.len);
     try packet.strip_indices.ensureTotalCapacity(gpa, strip_segment_indices.len);
+    for (clips) |clip| {
+        packet.clips.appendAssumeCapacity(packClip(clip));
+    }
+    for (call_clip_indices) |clip_index| {
+        packet.clip_indices.appendAssumeCapacity(.{ .value = clip_index });
+    }
     for (strip_segment_indices) |segment_index| {
         packet.strip_indices.appendAssumeCapacity(.{ .value = segment_index });
     }
@@ -177,6 +212,8 @@ pub fn build(
     packet.stats.workgroups = packet.tasks.items.len;
     packet.stats.upload_bytes =
         @sizeOf(GpuCall) * packet.calls.items.len +
+        @sizeOf(GpuClip) * packet.clips.items.len +
+        @sizeOf(GpuClipIndex) * packet.clip_indices.items.len +
         @sizeOf(GpuFineTask) * packet.tasks.items.len +
         @sizeOf(encode.Segment) * segments.len;
     return true;
@@ -289,6 +326,17 @@ fn packCall(default_rule: strip.FillRule, call: encode.EncodedCall, segments: []
         .flags = if (isOpaque(call)) call_flag_opaque else 0,
         .fill_rule = @intFromEnum(fillRuleForCall(default_rule, call.kind)),
         .image_id = image_id,
+        .clip_start = call.clips.start,
+        .clip_count = call.clips.count,
+    };
+}
+
+fn packClip(clip: encode.ClipRecord) GpuClip {
+    return .{
+        .bounds = clip.bounds,
+        .segment_start = clip.segments.start,
+        .segment_count = clip.segments.count,
+        .fill_rule = @intFromEnum(clip.rule),
     };
 }
 
@@ -410,13 +458,18 @@ fn colorVec(c: color.Color) [4]f32 {
 }
 
 comptime {
-    std.debug.assert(@sizeOf(GpuCall) == 224);
+    std.debug.assert(@sizeOf(GpuCall) == 240);
     std.debug.assert(@offsetOf(GpuCall, "paint_mat0") == 0);
     std.debug.assert(@offsetOf(GpuCall, "scissor_mat0") == 48);
     std.debug.assert(@offsetOf(GpuCall, "inner_color") == 96);
     std.debug.assert(@offsetOf(GpuCall, "bounds") == 176);
     std.debug.assert(@offsetOf(GpuCall, "segment_start") == 192);
     std.debug.assert(@offsetOf(GpuCall, "task_start") == 200);
+    std.debug.assert(@offsetOf(GpuCall, "clip_start") == 220);
+    std.debug.assert(@sizeOf(GpuClip) == 32);
+    std.debug.assert(@offsetOf(GpuClip, "bounds") == 0);
+    std.debug.assert(@offsetOf(GpuClip, "segment_start") == 16);
+    std.debug.assert(@sizeOf(GpuClipIndex) == 4);
     std.debug.assert(@sizeOf(GpuFineTask) == 32);
     std.debug.assert(@offsetOf(GpuFineTask, "x") == 0);
     std.debug.assert(@offsetOf(GpuFineTask, "call_index") == 8);
