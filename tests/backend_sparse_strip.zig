@@ -375,6 +375,35 @@ test "sparse backend queues stroke outlines as path segments" {
     try testing.expectEqual(@as(u32, 3), backend.calls.items[0].segments.count);
 }
 
+test "sparse stroke coverage uses nonzero even when fill rule is even odd" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    backend.fill_rule = .even_odd;
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const paint = color.solid(color.rgbaf(1, 1, 1, 1));
+    const points = [_]Point{
+        .{ .x = 4, .y = 4 },
+        .{ .x = 20, .y = 4 },
+        .{ .x = 20, .y = 20 },
+        .{ .x = 4, .y = 20 },
+        .{ .x = 4, .y = 4 },
+        .{ .x = 20, .y = 4 },
+        .{ .x = 20, .y = 20 },
+        .{ .x = 4, .y = 20 },
+    };
+    const paths = [_]PathRange{
+        .{ .point_start = 0, .point_count = 4, .closed = true, .convex = true },
+        .{ .point_start = 4, .point_count = 4, .closed = true, .convex = true },
+    };
+
+    iface.stroke(iface.ctx, &paint, &disabled_scissor, 8, &paths, &points);
+    try testing.expect(backend.build());
+
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, rgbaAt(backend, 8, 8));
+}
+
 test "sparse backend texture callbacks store dimensions" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();

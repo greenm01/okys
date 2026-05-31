@@ -42,13 +42,15 @@ pub fn build(
     @memset(surface.items, 0);
 
     for (strips.items) |*s| {
+        const call = if (s.call_index < calls.len) calls[s.call_index] else null;
+        const call_fill_rule = if (call) |c| fillRuleForCall(fill_rule, c.kind) else fill_rule;
         const start = alphas.items.len;
         var local_y: u16 = 0;
         while (local_y < strip.tile_size) : (local_y += 1) {
             var local_x: u16 = 0;
             while (local_x < strip.tile_size) : (local_x += 1) {
                 const alpha = pixelCoverage(
-                    fill_rule,
+                    call_fill_rule,
                     s.x + local_x,
                     s.y + local_y,
                     s.segment_indices,
@@ -56,9 +58,9 @@ pub fn build(
                     segments,
                 );
                 try alphas.append(gpa, alpha);
-                if (s.call_index < calls.len) {
+                if (call) |c| {
                     compositePaint(
-                        calls[s.call_index],
+                        c,
                         textures,
                         alpha,
                         s.x + local_x,
@@ -145,6 +147,13 @@ fn filled(fill_rule: strip.FillRule, winding: i32) bool {
     return switch (fill_rule) {
         .nonzero => winding != 0,
         .even_odd => @mod(winding, 2) != 0,
+    };
+}
+
+fn fillRuleForCall(default_rule: strip.FillRule, kind: strip.CallKind) strip.FillRule {
+    return switch (kind) {
+        .fill => default_rule,
+        .stroke, .triangles => .nonzero,
     };
 }
 
