@@ -19,6 +19,10 @@ int main(void) {
     assert(ctx != NULL);
     OKYcontext *sparse_ctx = okyCreate(OKY_SPARSE_STRIP);
     assert(sparse_ctx != NULL);
+    okySetupWebGPU(NULL, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);
+    okySetWebGPURenderTarget(NULL, NULL, 0, 0);
+    okySetupWebGPU(sparse_ctx, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);
+    okySetWebGPURenderTarget(sparse_ctx, NULL, 0, 0);
     okyDelete(sparse_ctx);
 
     okyBeginFrame(ctx, 800.0f, 600.0f, 1.0f);

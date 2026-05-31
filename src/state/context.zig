@@ -13,6 +13,7 @@ const Textures = @import("textures.zig").Textures;
 const GlyphAtlas = @import("glyph_atlas.zig").GlyphAtlas;
 const FontStore = @import("fonts.zig").FontStore;
 const RenderInterface = @import("../render/interface.zig").RenderInterface;
+const WebGpuRuntime = @import("../render/webgpu_runtime.zig").Runtime;
 const backend_selection = @import("../render/backend_selection.zig");
 const BackendKind = backend_selection.BackendKind;
 
@@ -34,6 +35,7 @@ pub const Context = struct {
     glyph_atlas: GlyphAtlas = .{},
     fonts: FontStore = .{},
     backend: ?RenderInterface = null,
+    webgpu: ?*WebGpuRuntime = null,
 
     width: f32 = 0,
     height: f32 = 0,
@@ -80,7 +82,25 @@ pub const Context = struct {
         self.backend = backend;
     }
 
+    pub fn installWebGPU(self: *Context, runtime: *WebGpuRuntime) void {
+        self.clearBackend();
+        self.webgpu = runtime;
+        self.backend = runtime.backend.interface();
+    }
+
     pub fn clearBackend(self: *Context) void {
+        if (self.webgpu) |runtime| {
+            if (self.backend) |b| {
+                if (@intFromPtr(b.ctx) == @intFromPtr(runtime.backend)) {
+                    self.backend = null;
+                    self.webgpu = null;
+                    runtime.deinit();
+                    return;
+                }
+            }
+            self.webgpu = null;
+            runtime.deinit();
+        }
         if (self.backend) |b| {
             b.deinit(b.ctx);
             self.backend = null;

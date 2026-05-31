@@ -26,6 +26,10 @@ pub fn beginFrame(ctx: *Context, w: f32, h: f32, dpr: f32) void {
 }
 
 pub fn endFrame(ctx: *Context) void {
+    if (ctx.webgpu) |runtime| {
+        _ = runtime.submit(ctx.width, ctx.height);
+        return;
+    }
     if (ctx.backend) |b| b.flush(b.ctx);
     // TODO: the fill/stroke ops feed the backend; endFrame flushes it.
 }

@@ -76,6 +76,7 @@ test "all production modules analyze" {
     _ = okys.render.frame_capture;
     _ = okys.render.interface;
     _ = okys.render.sokol_device;
+    _ = okys.render.webgpu_runtime;
     _ = okys.c_api;
     _ = backend_selection_tests;
     _ = sparse_cpu_golden_tests;
@@ -96,6 +97,12 @@ test "all production modules analyze" {
     _ = tiger_data_tests;
     _ = stroke_dash_tests;
     _ = text_abi_tests;
+}
+
+test "webgpu texture format maps to sokol formats" {
+    try testing.expectEqual(@as(?okys.render.sokol_device.PixelFormat, .BGRA8), okys.render.webgpu_runtime.pixelFormatFromInt(1));
+    try testing.expectEqual(@as(?okys.render.sokol_device.PixelFormat, .RGBA8), okys.render.webgpu_runtime.pixelFormatFromInt(2));
+    try testing.expectEqual(@as(?okys.render.sokol_device.PixelFormat, null), okys.render.webgpu_runtime.pixelFormatFromInt(0));
 }
 
 test "rgba maps 0..255 to 0..1" {

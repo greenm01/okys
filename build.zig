@@ -5,12 +5,23 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const with_nim_smoke = b.option(bool, "with-nim-smoke", "Run the Nim ABI smoke test as part of `zig build test`") orelse false;
+    const with_wgpu = b.option(bool, "wgpu", "Build sokol with the WebGPU backend") orelse false;
+    const webgpu_include = b.option([]const u8, "webgpu-include", "Override the WebGPU C header include directory");
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
+        .wgpu = with_wgpu,
     });
     const dep_tatfi = b.dependency("tatfi", .{});
     const mod_sokol = dep_sokol.module("sokol");
+    const lib_sokol = dep_sokol.artifact("sokol_clib");
+    if (with_wgpu) {
+        if (webgpu_include) |include_path| {
+            lib_sokol.root_module.addSystemIncludePath(.{ .cwd_relative = include_path });
+        } else {
+            lib_sokol.root_module.addSystemIncludePath(b.path("vendor/webgpu/include"));
+        }
+    }
     const mod_tatfi = dep_tatfi.module("tatfi");
     const mod_okys_shader = try sokol.shdc.createModule(b, "okys_shader", mod_sokol, .{
         .shdc_dep = dep_sokol.builder.dependency("shdc", .{}),
@@ -192,6 +203,11 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
     lib_mod.addIncludePath(b.path("include"));
+    lib_mod.addImport("sokol", mod_sokol);
+    lib_mod.addImport("okys_shader", mod_okys_shader);
+    lib_mod.addImport("okys_path_shader", mod_okys_path_shader);
+    lib_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
+    lib_mod.addImport("okys_sparse_fine_shader", mod_okys_sparse_fine_shader);
     lib_mod.addImport("tatfi", mod_tatfi);
 
     const lib = b.addLibrary(.{
@@ -201,6 +217,7 @@ pub fn build(b: *std.Build) !void {
     });
     lib.installHeader(b.path("include/okys.h"), "okys.h");
     b.installArtifact(lib);
+    b.installArtifact(lib_sokol);
 
     // Unit tests live outside production code. tests/unit.zig imports the
     // production modules so their comptime assertions still run.
@@ -249,6 +266,8 @@ pub fn build(b: *std.Build) !void {
         "--nimcache:.zig-cache/nim_abi_smoke",
         "--passC:-Iinclude",
         "--passL:zig-out/lib/libokys.a",
+        "--passL:zig-out/lib/libsokol_clib.a",
+        "--passL:-lasound -lGL -lX11 -lXi -lXcursor -lubsan",
         "--out:zig-out/nim_abi_smoke",
         "tests/nim_abi_smoke.nim",
     });

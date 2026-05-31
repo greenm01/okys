@@ -23,6 +23,7 @@ pub const Color = sg.Color;
 pub const Image = sg.Image;
 pub const Sampler = sg.Sampler;
 pub const View = sg.View;
+pub const PixelFormat = sg.PixelFormat;
 pub const PassAction = sg.PassAction;
 pub const Swapchain = sg.Swapchain;
 pub const BufferDesc = sg.BufferDesc;
@@ -87,6 +88,30 @@ pub const SparseFineSubmitTiming = struct {
     dispatches: usize = 0,
     upload_bytes: usize = 0,
 };
+
+pub fn webgpuDesc(device: *const anyopaque, color_format: PixelFormat) Desc {
+    return .{
+        .environment = .{
+            .defaults = .{
+                .color_format = color_format,
+                .depth_format = .NONE,
+                .sample_count = 1,
+            },
+            .wgpu = .{ .device = device },
+        },
+    };
+}
+
+pub fn webgpuSwapchain(render_view: *const anyopaque, width: u32, height: u32, color_format: PixelFormat) Swapchain {
+    return .{
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .sample_count = 1,
+        .color_format = color_format,
+        .depth_format = .NONE,
+        .wgpu = .{ .render_view = render_view },
+    };
+}
 
 pub const PathPipelineKind = enum {
     stencil_nonzero,

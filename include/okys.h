@@ -25,6 +25,11 @@ enum OKYcreateFlags {
     OKY_SPARSE_STRIP = 1 << 2,    /* sparse-strip backend */
 };
 
+enum OKYwebGPUTextureFormat {
+    OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM = 1,
+    OKY_WEBGPU_TEXTURE_FORMAT_RGBA8_UNORM = 2,
+};
+
 enum OKYlineCap {
     OKY_BUTT = 0,
     OKY_ROUND = 1,
@@ -105,6 +110,12 @@ void okyBeginFrame(OKYcontext *ctx, float window_width, float window_height,
                    float device_pixel_ratio);
 void okyEndFrame(OKYcontext *ctx);
 void okyCancelFrame(OKYcontext *ctx);
+
+/* --- WebGPU bridge ----------------------------------------------------- */
+void okySetupWebGPU(OKYcontext *ctx, const void *wgpu_device,
+                    int color_format);
+void okySetWebGPURenderTarget(OKYcontext *ctx, const void *color_texture_view,
+                              int width_px, int height_px);
 
 /* --- state stack ------------------------------------------------------- */
 void okySave(OKYcontext *ctx);

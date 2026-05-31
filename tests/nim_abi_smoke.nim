@@ -3,6 +3,7 @@ import std/math
 const
   OKY_ANTIALIAS* = 1 shl 0
   OKY_SPARSE_STRIP* = 1 shl 2
+  OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM* = 1
   OKY_ROUND* = 1
   OKY_BEVEL* = 2
   OKY_CW* = 2
@@ -49,6 +50,8 @@ proc okyDelete(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
 proc okyBeginFrame(ctx: ptr OKYcontext; w, h, dpr: cfloat) {.importc, header: "okys.h".}
 proc okyEndFrame(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
 proc okyCancelFrame(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
+proc okySetupWebGPU(ctx: ptr OKYcontext; wgpuDevice: pointer; colorFormat: cint) {.importc, header: "okys.h".}
+proc okySetWebGPURenderTarget(ctx: ptr OKYcontext; colorTextureView: pointer; widthPx, heightPx: cint) {.importc, header: "okys.h".}
 
 proc okySave(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
 proc okyRestore(ctx: ptr OKYcontext) {.importc, header: "okys.h".}
@@ -143,6 +146,10 @@ let ctx = okyCreate(OKY_ANTIALIAS)
 doAssert ctx != nil
 let sparseCtx = okyCreate(OKY_SPARSE_STRIP)
 doAssert sparseCtx != nil
+okySetupWebGPU(nil, nil, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM)
+okySetWebGPURenderTarget(nil, nil, 0, 0)
+okySetupWebGPU(sparseCtx, nil, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM)
+okySetWebGPURenderTarget(sparseCtx, nil, 0, 0)
 okyDelete(sparseCtx)
 
 okyBeginFrame(ctx, 800.0, 600.0, 1.0)

@@ -22,6 +22,7 @@ const state_ops = @import("ops/state_ops.zig");
 const text_ops = @import("ops/text_ops.zig");
 const TextGlyphPosition = text_ops.TextGlyphPosition;
 const TextRow = text_ops.TextRow;
+const webgpu_runtime = @import("render/webgpu_runtime.zig");
 
 const version_string = "0.0.0";
 const abi_version: u32 = 0;
@@ -58,6 +59,25 @@ export fn okyEndFrame(ctx: ?*Context) void {
 
 export fn okyCancelFrame(ctx: ?*Context) void {
     if (ctx) |c| frame.cancelFrame(c);
+}
+
+// --- WebGPU bridge ----------------------------------------------------------
+
+export fn okySetupWebGPU(ctx: ?*Context, wgpu_device: ?*const anyopaque, color_format: c_int) void {
+    const c = ctx orelse return;
+    const device = wgpu_device orelse return;
+    const pixel_format = webgpu_runtime.pixelFormatFromInt(color_format) orelse return;
+    c.clearBackend();
+    const runtime = webgpu_runtime.Runtime.create(c.gpa, device, pixel_format) catch return;
+    c.installWebGPU(runtime);
+}
+
+export fn okySetWebGPURenderTarget(ctx: ?*Context, color_texture_view: ?*const anyopaque, width_px: c_int, height_px: c_int) void {
+    const c = ctx orelse return;
+    const runtime = c.webgpu orelse return;
+    const view = color_texture_view orelse return;
+    if (width_px <= 0 or height_px <= 0) return;
+    runtime.setRenderTarget(view, @intCast(width_px), @intCast(height_px));
 }
 
 // --- state stack -----------------------------------------------------------
