@@ -14,6 +14,7 @@ const captured_frame_golden_tests = @import("captured_frame_golden.zig");
 const frame_capture_tests = @import("frame_capture.zig");
 const frame_profile_tests = @import("frame_profile.zig");
 const glyph_atlas_tests = @import("glyph_atlas.zig");
+const diagnostics_tests = @import("diagnostics.zig");
 const image_ops_tests = @import("image_ops.zig");
 const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
@@ -48,6 +49,7 @@ test "all production modules analyze" {
     _ = okys.state.textures;
     _ = okys.state.glyph_atlas;
     _ = okys.state.fonts;
+    _ = okys.state.diagnostics;
     _ = okys.state.context;
     _ = okys.ops.frame;
     _ = okys.ops.path;
@@ -90,6 +92,7 @@ test "all production modules analyze" {
     _ = frame_capture_tests;
     _ = frame_profile_tests;
     _ = glyph_atlas_tests;
+    _ = diagnostics_tests;
     _ = image_ops_tests;
     _ = mock_backend;
     _ = sokol_device_tests;

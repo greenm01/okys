@@ -19,6 +19,7 @@ pub const state = struct {
     pub const textures = @import("state/textures.zig");
     pub const glyph_atlas = @import("state/glyph_atlas.zig");
     pub const fonts = @import("state/fonts.zig");
+    pub const diagnostics = @import("state/diagnostics.zig");
     pub const context = @import("state/context.zig");
 };
 

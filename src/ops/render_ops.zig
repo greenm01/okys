@@ -12,6 +12,10 @@ const OKY_ANTIALIAS: u32 = 1 << 0;
 pub fn fill(ctx: *Context) void {
     flatten.flatten(ctx);
     if (ctx.cache.paths.items.len == 0 or ctx.cache.points.items.len == 0) return;
+    if (!validPathSlices(ctx.cache.paths.items, ctx.cache.points.items.len)) {
+        ctx.recordDiagnostic(.out_of_range_path_slice);
+        return;
+    }
 
     const backend = ctx.backend orelse return;
     const state = ctx.state();
@@ -32,6 +36,10 @@ pub fn fill(ctx: *Context) void {
 pub fn pushClipPath(ctx: *Context, rule: path.ClipRule) void {
     flatten.flatten(ctx);
     if (ctx.cache.paths.items.len == 0 or ctx.cache.points.items.len == 0) return;
+    if (!validPathSlices(ctx.cache.paths.items, ctx.cache.points.items.len)) {
+        ctx.recordDiagnostic(.out_of_range_path_slice);
+        return;
+    }
 
     const backend = ctx.backend orelse return;
     backend.push_clip_path(
@@ -76,6 +84,10 @@ pub fn stroke(ctx: *Context) void {
         );
     }
     if (ctx.stroke_outline.paths.items.len == 0 or ctx.stroke_outline.points.items.len == 0) return;
+    if (!validPathSlices(ctx.stroke_outline.paths.items, ctx.stroke_outline.points.items.len)) {
+        ctx.recordDiagnostic(.out_of_range_path_slice);
+        return;
+    }
 
     const backend = ctx.backend orelse return;
     const state = ctx.state();
@@ -90,4 +102,14 @@ pub fn stroke(ctx: *Context) void {
         ctx.stroke_outline.paths.items,
         ctx.stroke_outline.points.items,
     );
+}
+
+fn validPathSlices(paths: []const path.PathRange, point_len: usize) bool {
+    for (paths) |p| {
+        const start: usize = @intCast(p.point_start);
+        const count: usize = @intCast(p.point_count);
+        if (start > point_len) return false;
+        if (count > point_len - start) return false;
+    }
+    return true;
 }

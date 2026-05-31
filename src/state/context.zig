@@ -12,6 +12,9 @@ const FrameProfile = @import("frame_profile.zig").FrameProfile;
 const Textures = @import("textures.zig").Textures;
 const GlyphAtlas = @import("glyph_atlas.zig").GlyphAtlas;
 const FontStore = @import("fonts.zig").FontStore;
+const diagnostics = @import("diagnostics.zig");
+pub const DiagnosticKind = diagnostics.DiagnosticKind;
+pub const Diagnostics = diagnostics.Diagnostics;
 const RenderInterface = @import("../render/interface.zig").RenderInterface;
 const WebGpuRuntime = @import("../render/webgpu_runtime.zig").Runtime;
 const backend_selection = @import("../render/backend_selection.zig");
@@ -34,6 +37,7 @@ pub const Context = struct {
     textures: Textures,
     glyph_atlas: GlyphAtlas = .{},
     fonts: FontStore = .{},
+    diagnostics: Diagnostics = .{},
     backend: ?RenderInterface = null,
     webgpu: ?*WebGpuRuntime = null,
 
@@ -75,6 +79,14 @@ pub const Context = struct {
     /// The live (top-of-stack) draw state.
     pub fn state(self: *Context) *State {
         return &self.states.items[self.states.items.len - 1];
+    }
+
+    pub fn recordDiagnostic(self: *Context, kind: DiagnosticKind) void {
+        self.diagnostics.record(kind);
+    }
+
+    pub fn resetDiagnostics(self: *Context) void {
+        self.diagnostics = .{};
     }
 
     pub fn installBackend(self: *Context, backend: RenderInterface) void {

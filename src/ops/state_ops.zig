@@ -18,7 +18,10 @@ pub fn save(ctx: *Context) void {
 
 pub fn restore(ctx: *Context) void {
     // Always keep one state on the stack.
-    if (ctx.states.items.len <= 1) return;
+    if (ctx.states.items.len <= 1) {
+        ctx.recordDiagnostic(.unbalanced_restore);
+        return;
+    }
     _ = ctx.states.pop();
 }
 

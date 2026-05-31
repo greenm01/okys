@@ -25,21 +25,33 @@ fn parseCommands(ctx: *Context) void {
     const data = ctx.commands.data.items;
     var i: usize = 0;
     while (i < data.len) {
-        const command = commandFromValue(data[i]) orelse break;
+        const command = commandFromValue(data[i]) orelse {
+            ctx.recordDiagnostic(.malformed_command_stream);
+            break;
+        };
         switch (command) {
             .move_to => {
-                if (i + 2 >= data.len) break;
+                if (i + 2 >= data.len) {
+                    ctx.recordDiagnostic(.malformed_command_stream);
+                    break;
+                }
                 ctx.cache.addPath(ctx.gpa);
                 ctx.cache.addPoint(ctx.gpa, data[i + 1], data[i + 2], .{ .corner = true }, ctx.dist_tol);
                 i += 3;
             },
             .line_to => {
-                if (i + 2 >= data.len) break;
+                if (i + 2 >= data.len) {
+                    ctx.recordDiagnostic(.malformed_command_stream);
+                    break;
+                }
                 ctx.cache.addPoint(ctx.gpa, data[i + 1], data[i + 2], .{ .corner = true }, ctx.dist_tol);
                 i += 3;
             },
             .bezier_to => {
-                if (i + 6 >= data.len) break;
+                if (i + 6 >= data.len) {
+                    ctx.recordDiagnostic(.malformed_command_stream);
+                    break;
+                }
                 if (ctx.cache.lastPoint()) |last| {
                     tesselateBezier(
                         ctx,
@@ -62,7 +74,10 @@ fn parseCommands(ctx: *Context) void {
                 i += 1;
             },
             .winding => {
-                if (i + 1 >= data.len) break;
+                if (i + 1 >= data.len) {
+                    ctx.recordDiagnostic(.malformed_command_stream);
+                    break;
+                }
                 ctx.cache.pathWinding(windingFromValue(data[i + 1]));
                 i += 2;
             },
@@ -226,6 +241,8 @@ fn pointsForPath(points: []Point, active_path: *const path.PathRange) []Point {
 }
 
 fn commandFromValue(value: f32) ?Command {
+    if (!std.math.isFinite(value)) return null;
+    if (value != @trunc(value) or value < 0 or value > 4) return null;
     const tag: u8 = @intFromFloat(value);
     return switch (tag) {
         0 => .move_to,
