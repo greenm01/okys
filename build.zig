@@ -1,15 +1,28 @@
 const std = @import("std");
 const sokol = @import("sokol");
 
+const SokolBackend = enum {
+    native,
+    gl,
+    vulkan,
+    wgpu,
+};
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const with_nim_smoke = b.option(bool, "with-nim-smoke", "Run the Nim ABI smoke test as part of `zig build test`") orelse false;
-    const with_wgpu = b.option(bool, "wgpu", "Build sokol with the WebGPU backend") orelse false;
+    const backend = try resolveSokolBackend(
+        b.option([]const u8, "backend", "Sokol backend to build: native, gl, vulkan, or wgpu"),
+        b.option(bool, "wgpu", "Deprecated alias for -Dbackend=wgpu"),
+    );
+    const with_wgpu = backend == .wgpu;
     const webgpu_include = b.option([]const u8, "webgpu-include", "Override the WebGPU C header include directory");
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
+        .gl = backend == .gl,
+        .vulkan = backend == .vulkan,
         .wgpu = with_wgpu,
     });
     const dep_tatfi = b.dependency("tatfi", .{});
@@ -279,4 +292,29 @@ pub fn build(b: *std.Build) !void {
     if (with_nim_smoke) {
         test_step.dependOn(&nim_smoke.step);
     }
+}
+
+fn resolveSokolBackend(backend_name: ?[]const u8, legacy_wgpu: ?bool) !SokolBackend {
+    if (backend_name) |name| {
+        const backend: SokolBackend = if (std.mem.eql(u8, name, "native"))
+            .native
+        else if (std.mem.eql(u8, name, "gl"))
+            .gl
+        else if (std.mem.eql(u8, name, "vulkan"))
+            .vulkan
+        else if (std.mem.eql(u8, name, "wgpu"))
+            .wgpu
+        else {
+            std.log.err("invalid -Dbackend={s}; expected 'native', 'gl', 'vulkan', or 'wgpu'", .{name});
+            return error.InvalidSokolBackend;
+        };
+
+        if (legacy_wgpu == true and backend != .wgpu) {
+            std.log.err("-Dbackend={s} conflicts with -Dwgpu=true", .{name});
+            return error.InvalidSokolBackend;
+        }
+        return backend;
+    }
+
+    return if (legacy_wgpu == true) .wgpu else .native;
 }
