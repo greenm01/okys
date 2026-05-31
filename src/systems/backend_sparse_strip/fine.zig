@@ -31,6 +31,10 @@ pub const Profile = struct {
     opaque_write_pixels: usize = 0,
     rect_fast_calls: usize = 0,
     rect_fast_pixels: usize = 0,
+    fill_ops: usize = 0,
+    alpha_fill_ops: usize = 0,
+    fill_pixels: usize = 0,
+    alpha_fill_pixels: usize = 0,
 
     pub fn reset(self: *Profile) void {
         self.* = .{};
@@ -200,7 +204,7 @@ fn renderBoundaryStrip(
         while (local_x < strip.tile_size) : (local_x += 1) {
             const alpha = alphas.items[alpha_index];
             if (solid) |sp| {
-                const result = compositeSolidPaint(sp, alpha, s.x + local_x, s.y + local_y, width, height, surface);
+                const result = compositeSolidAlphaFillPixel(sp, alpha, s.x + local_x, s.y + local_y, width, height, surface);
                 if (result.touched) touched += 1;
                 if (result.opaque_write) {
                     if (profile) |p| p.opaque_write_pixels += 1;
@@ -225,6 +229,7 @@ fn renderBoundaryStrip(
     if (profile) |p| {
         p.boundary_composite_ns += elapsedSince(composite_start);
         p.composite_pixels += touched;
+        recordAlphaFill(p, touched);
         if (solid != null) p.solid_fast_pixels += touched;
     }
     s.alpha = .{ .start = @intCast(start), .count = strip.tile_area };
@@ -275,6 +280,7 @@ fn renderSolidInterior(
                 p.solid_pixels += result.touched;
                 p.composite_pixels += result.touched;
                 p.opaque_write_pixels += result.opaque_writes;
+                recordFill(p, result.touched);
                 if (solid != null) p.solid_fast_pixels += result.touched;
                 scan_start = profileStart(profile);
             }
@@ -309,6 +315,8 @@ fn renderSolidRectFast(
     if (profile) |p| p.boundary_alpha_ns += elapsedSince(alpha_start);
 
     var touched: usize = 0;
+    var fill_pixels: usize = 0;
+    var alpha_fill_pixels: usize = 0;
     var opaque_writes: usize = 0;
     const composite_start = profileStart(profile);
     const x_start = clampPixelStart(rect.x0, width);
@@ -321,8 +329,13 @@ fn renderSolidRectFast(
         const y_alpha = coverage1D(@floatFromInt(y), rect.y0, rect.y1);
         while (x < x_end) : (x += 1) {
             const alpha = normToU8(coverage1D(@floatFromInt(x), rect.x0, rect.x1) * y_alpha);
-            const result = compositeSolidPaint(solid, alpha, @intCast(x), @intCast(y), width, height, surface);
+            const result = if (alpha == 255)
+                compositeSolidFillPixel(solid, @intCast(x), @intCast(y), width, height, surface)
+            else
+                compositeSolidAlphaFillPixel(solid, alpha, @intCast(x), @intCast(y), width, height, surface);
             if (result.touched) touched += 1;
+            if (result.touched and alpha == 255) fill_pixels += 1;
+            if (result.touched and alpha != 255) alpha_fill_pixels += 1;
             if (result.opaque_write) opaque_writes += 1;
         }
     }
@@ -335,6 +348,8 @@ fn renderSolidRectFast(
         p.opaque_write_pixels += opaque_writes;
         p.rect_fast_calls += 1;
         p.rect_fast_pixels += touched;
+        recordFill(p, fill_pixels);
+        if (alpha_fill_pixels > 0) recordAlphaFill(p, alpha_fill_pixels);
     }
 }
 
@@ -356,12 +371,24 @@ fn compositeSolidTile(
     while (local_y < strip.tile_size) : (local_y += 1) {
         var local_x: u16 = 0;
         while (local_x < strip.tile_size) : (local_x += 1) {
-            const pixel = compositeSolidPaint(solid, 255, x + local_x, y + local_y, width, height, surface);
+            const pixel = compositeSolidFillPixel(solid, x + local_x, y + local_y, width, height, surface);
             if (pixel.touched) result.touched += 1;
             if (pixel.opaque_write) result.opaque_writes += 1;
         }
     }
     return result;
+}
+
+fn recordFill(profile: *Profile, pixels: usize) void {
+    if (pixels == 0) return;
+    profile.fill_ops += 1;
+    profile.fill_pixels += pixels;
+}
+
+fn recordAlphaFill(profile: *Profile, pixels: usize) void {
+    if (pixels == 0) return;
+    profile.alpha_fill_ops += 1;
+    profile.alpha_fill_pixels += pixels;
 }
 
 fn compositeGenericTile(
@@ -654,7 +681,30 @@ fn atRectY(y: f32, bounds: [4]f32) bool {
     return y == bounds[1] or y == bounds[3];
 }
 
-fn compositeSolidPaint(
+fn compositeSolidFillPixel(
+    solid: SolidPaint,
+    x: u16,
+    y: u16,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) CompositeResult {
+    return compositeSolidPixel(solid, 255, x, y, width, height, surface);
+}
+
+fn compositeSolidAlphaFillPixel(
+    solid: SolidPaint,
+    coverage_alpha: u8,
+    x: u16,
+    y: u16,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) CompositeResult {
+    return compositeSolidPixel(solid, coverage_alpha, x, y, width, height, surface);
+}
+
+fn compositeSolidPixel(
     solid: SolidPaint,
     coverage_alpha: u8,
     x: u16,

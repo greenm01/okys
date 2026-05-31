@@ -70,6 +70,10 @@ const ProfileStats = struct {
     opaque_write_pixels: usize = 0,
     rect_fast_calls: usize = 0,
     rect_fast_pixels: usize = 0,
+    fill_ops: usize = 0,
+    alpha_fill_ops: usize = 0,
+    fill_pixels: usize = 0,
+    alpha_fill_pixels: usize = 0,
 };
 
 const Result = struct {
@@ -270,6 +274,10 @@ fn profileStats(profile: SparseProfile) ProfileStats {
         .opaque_write_pixels = profile.fine_profile.opaque_write_pixels,
         .rect_fast_calls = profile.fine_profile.rect_fast_calls,
         .rect_fast_pixels = profile.fine_profile.rect_fast_pixels,
+        .fill_ops = profile.fine_profile.fill_ops,
+        .alpha_fill_ops = profile.fine_profile.alpha_fill_ops,
+        .fill_pixels = profile.fine_profile.fill_pixels,
+        .alpha_fill_pixels = profile.fine_profile.alpha_fill_pixels,
     };
 }
 
@@ -307,6 +315,10 @@ fn averageProfile(total: ProfileStats, last: ProfileStats) ProfileStats {
         .opaque_write_pixels = last.opaque_write_pixels,
         .rect_fast_calls = last.rect_fast_calls,
         .rect_fast_pixels = last.rect_fast_pixels,
+        .fill_ops = last.fill_ops,
+        .alpha_fill_ops = last.alpha_fill_ops,
+        .fill_pixels = last.fill_pixels,
+        .alpha_fill_pixels = last.alpha_fill_pixels,
     };
 }
 
@@ -315,12 +327,12 @@ fn bytesOf(comptime T: type, count: usize) usize {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
 }
 
 fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: []const u8, result: Result) void {
     _ = std.c.printf(
-        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(backend_name.len)),
@@ -358,6 +370,10 @@ fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: [
         u64ForPrint(result.profile.opaque_write_pixels),
         u64ForPrint(result.profile.rect_fast_calls),
         u64ForPrint(result.profile.rect_fast_pixels),
+        u64ForPrint(result.profile.fill_ops),
+        u64ForPrint(result.profile.alpha_fill_ops),
+        u64ForPrint(result.profile.fill_pixels),
+        u64ForPrint(result.profile.alpha_fill_pixels),
     );
 }
 

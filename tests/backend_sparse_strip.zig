@@ -109,6 +109,10 @@ test "sparse profiled build reports fine-stage work counters" {
     try testing.expectEqual(@as(usize, 1), profile.fine_profile.rect_fast_calls);
     try testing.expect(profile.fine_profile.rect_fast_pixels > 0);
     try testing.expectEqual(profile.fine_profile.rect_fast_pixels, profile.fine_profile.solid_fast_pixels);
+    try testing.expectEqual(@as(usize, 1), profile.fine_profile.fill_ops);
+    try testing.expectEqual(@as(usize, 0), profile.fine_profile.alpha_fill_ops);
+    try testing.expectEqual(profile.fine_profile.rect_fast_pixels, profile.fine_profile.fill_pixels);
+    try testing.expectEqual(@as(usize, 0), profile.fine_profile.alpha_fill_pixels);
     try testing.expect(profile.fine_profile.opaque_write_pixels > 0);
 }
 
@@ -119,7 +123,8 @@ test "sparse fine stage uses analytic subpixel coverage" {
     iface.viewport(iface.ctx, 32, 32, 1);
 
     queueRect(&iface, 4.25, 4.25, 12.25, 12.25);
-    try testing.expect(backend.build());
+    var profile: sparse.Profile = .{};
+    try testing.expect(backend.buildProfiled(&profile));
 
     const left_top = findStrip(backend, 4, 4, 0).?;
     try expectAlphaApprox(143, alphaAt(backend, left_top, 4, 4));
@@ -128,6 +133,10 @@ test "sparse fine stage uses analytic subpixel coverage" {
     const right_bottom = findStrip(backend, 12, 12, 0).?;
     try expectAlphaApprox(16, alphaAt(backend, right_bottom, 12, 12));
     try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 3, 4));
+    try testing.expectEqual(@as(usize, 1), profile.fine_profile.rect_fast_calls);
+    try testing.expect(profile.fine_profile.fill_pixels > 0);
+    try testing.expect(profile.fine_profile.alpha_fill_ops > 0);
+    try testing.expect(profile.fine_profile.alpha_fill_pixels > 0);
 }
 
 test "sparse rect fast path blends translucent solid paint" {
@@ -245,6 +254,8 @@ test "sparse linear gradient resolves into proof surface" {
     try testing.expectEqual(@as(u8, 255), mid[3]);
     try testing.expectEqual(@as(usize, 0), profile.fine_profile.rect_fast_calls);
     try testing.expectEqual(@as(usize, 0), profile.fine_profile.solid_fast_pixels);
+    try testing.expect(profile.fine_profile.fill_pixels > 0);
+    try testing.expect(profile.fine_profile.alpha_fill_pixels > 0);
 }
 
 test "sparse radial gradient resolves center and edge colors" {
