@@ -10,6 +10,7 @@ const backend_stencil_draw_plan_tests = @import("backend_stencil_draw_plan.zig")
 const backend_stencil_golden_tests = @import("backend_stencil_golden.zig");
 const backend_stencil_replay_tests = @import("backend_stencil_replay.zig");
 const backend_stencil_tests = @import("backend_stencil.zig");
+const captured_frame_golden_tests = @import("captured_frame_golden.zig");
 const frame_capture_tests = @import("frame_capture.zig");
 const frame_profile_tests = @import("frame_profile.zig");
 const glyph_atlas_tests = @import("glyph_atlas.zig");
@@ -84,6 +85,7 @@ test "all production modules analyze" {
     _ = backend_stencil_golden_tests;
     _ = backend_stencil_replay_tests;
     _ = backend_stencil_tests;
+    _ = captured_frame_golden_tests;
     _ = frame_capture_tests;
     _ = frame_profile_tests;
     _ = glyph_atlas_tests;
