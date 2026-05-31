@@ -114,6 +114,25 @@ test "sparse profiled build reports fine-stage work counters" {
     try testing.expectEqual(profile.fine_profile.rect_fast_pixels, profile.fine_profile.fill_pixels);
     try testing.expectEqual(@as(usize, 0), profile.fine_profile.alpha_fill_pixels);
     try testing.expect(profile.fine_profile.opaque_write_pixels > 0);
+
+    const packet = profile.frame_packet;
+    try testing.expectEqual(backend.calls.items.len, packet.calls);
+    try testing.expectEqual(backend.segments.items.len, packet.segments);
+    try testing.expectEqual(backend.tiles.items.len, packet.tile_refs);
+    try testing.expectEqual(backend.strips.items.len, packet.strips);
+    try testing.expectEqual(backend.strip_segment_indices.items.len, packet.strip_indices);
+    try testing.expectEqual(backend.alphas.items.len, packet.alpha_bytes);
+    try testing.expectEqual(backend.surface.items.len, packet.surface_bytes);
+    try testing.expectEqual(@as(usize, 0), packet.texture_bytes);
+    try testing.expectEqual(@sizeOf(sparse.EncodedCall) * backend.calls.items.len, packet.calls_bytes);
+    try testing.expectEqual(@sizeOf(sparse.Segment) * backend.segments.items.len, packet.segments_bytes);
+    try testing.expectEqual(@sizeOf(sparse.TileRef) * backend.tiles.items.len, packet.tile_refs_bytes);
+    try testing.expectEqual(@sizeOf(sparse.Strip) * backend.strips.items.len, packet.strips_bytes);
+    try testing.expectEqual(@sizeOf(u32) * backend.strip_segment_indices.items.len, packet.strip_indices_bytes);
+    try testing.expect(packet.frame_packet_bytes >= packet.gpu_fine_upload_bytes);
+    try testing.expect(packet.gpu_fine_upload_bytes > 0);
+    try testing.expect(packet.packet_capacity_bytes >= packet.frame_packet_bytes);
+    try testing.expect(packet.max_strip_segments > 0);
 }
 
 test "sparse fine stage uses analytic subpixel coverage" {

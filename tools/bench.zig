@@ -74,6 +74,14 @@ const ProfileStats = struct {
     alpha_fill_ops: usize = 0,
     fill_pixels: usize = 0,
     alpha_fill_pixels: usize = 0,
+    packet_bytes: usize = 0,
+    gpu_fine_upload_bytes: usize = 0,
+    packet_capacity_bytes: usize = 0,
+    packet_slack_bytes: usize = 0,
+    alpha_bytes: usize = 0,
+    surface_bytes: usize = 0,
+    texture_bytes: usize = 0,
+    max_strip_segments: usize = 0,
 };
 
 const Result = struct {
@@ -278,6 +286,14 @@ fn profileStats(profile: SparseProfile) ProfileStats {
         .alpha_fill_ops = profile.fine_profile.alpha_fill_ops,
         .fill_pixels = profile.fine_profile.fill_pixels,
         .alpha_fill_pixels = profile.fine_profile.alpha_fill_pixels,
+        .packet_bytes = profile.frame_packet.frame_packet_bytes,
+        .gpu_fine_upload_bytes = profile.frame_packet.gpu_fine_upload_bytes,
+        .packet_capacity_bytes = profile.frame_packet.packet_capacity_bytes,
+        .packet_slack_bytes = profile.frame_packet.packet_slack_bytes,
+        .alpha_bytes = profile.frame_packet.alpha_bytes,
+        .surface_bytes = profile.frame_packet.surface_bytes,
+        .texture_bytes = profile.frame_packet.texture_bytes,
+        .max_strip_segments = profile.frame_packet.max_strip_segments,
     };
 }
 
@@ -319,6 +335,14 @@ fn averageProfile(total: ProfileStats, last: ProfileStats) ProfileStats {
         .alpha_fill_ops = last.alpha_fill_ops,
         .fill_pixels = last.fill_pixels,
         .alpha_fill_pixels = last.alpha_fill_pixels,
+        .packet_bytes = last.packet_bytes,
+        .gpu_fine_upload_bytes = last.gpu_fine_upload_bytes,
+        .packet_capacity_bytes = last.packet_capacity_bytes,
+        .packet_slack_bytes = last.packet_slack_bytes,
+        .alpha_bytes = last.alpha_bytes,
+        .surface_bytes = last.surface_bytes,
+        .texture_bytes = last.texture_bytes,
+        .max_strip_segments = last.max_strip_segments,
     };
 }
 
@@ -327,12 +351,12 @@ fn bytesOf(comptime T: type, count: usize) usize {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\titerations\treplay_avg_ns\tbuild_avg_ns\ttotal_avg_ns\tcalls\tsegments\ttiles\tstrips\tvertices\tindices\tdraw_ops\tbuffer_bytes\tpacket_bytes\tgpu_fine_upload_bytes\tpacket_capacity_bytes\tpacket_slack_bytes\talpha_bytes\tsurface_bytes\ttexture_bytes\tmax_strip_segments\tbin_ns\tcoarse_ns\ttexture_views_ns\tfine_ns\tclear_ns\tboundary_index_ns\tboundary_alpha_ns\tboundary_composite_ns\tsolid_scan_ns\tsolid_composite_ns\tboundary_tiles\tsolid_tiles\tboundary_pixels\tsolid_pixels\tcomposite_pixels\tsolid_fast_pixels\topaque_write_pixels\trect_fast_calls\trect_fast_pixels\tfill_ops\talpha_fill_ops\tfill_pixels\talpha_fill_pixels\n");
 }
 
 fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: []const u8, result: Result) void {
     _ = std.c.printf(
-        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
+        "%.*s\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(backend_name.len)),
@@ -351,6 +375,14 @@ fn printResult(scene_name: []const u8, backend_name: []const u8, timing_scope: [
         u64ForPrint(result.stats.indices),
         u64ForPrint(result.stats.draw_ops),
         u64ForPrint(result.stats.buffer_bytes),
+        u64ForPrint(result.profile.packet_bytes),
+        u64ForPrint(result.profile.gpu_fine_upload_bytes),
+        u64ForPrint(result.profile.packet_capacity_bytes),
+        u64ForPrint(result.profile.packet_slack_bytes),
+        u64ForPrint(result.profile.alpha_bytes),
+        u64ForPrint(result.profile.surface_bytes),
+        u64ForPrint(result.profile.texture_bytes),
+        u64ForPrint(result.profile.max_strip_segments),
         u64ForPrint(result.profile.bin_ns),
         u64ForPrint(result.profile.coarse_ns),
         u64ForPrint(result.profile.texture_views_ns),

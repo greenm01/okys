@@ -32,10 +32,32 @@ pub const Profile = struct {
     texture_views_ns: u64 = 0,
     fine_ns: u64 = 0,
     fine_profile: fine.Profile = .{},
+    frame_packet: FramePacketStats = .{},
 
     pub fn reset(self: *Profile) void {
         self.* = .{};
     }
+};
+
+pub const FramePacketStats = struct {
+    calls: usize = 0,
+    segments: usize = 0,
+    tile_refs: usize = 0,
+    strips: usize = 0,
+    strip_indices: usize = 0,
+    alpha_bytes: usize = 0,
+    surface_bytes: usize = 0,
+    texture_bytes: usize = 0,
+    calls_bytes: usize = 0,
+    segments_bytes: usize = 0,
+    tile_refs_bytes: usize = 0,
+    strips_bytes: usize = 0,
+    strip_indices_bytes: usize = 0,
+    frame_packet_bytes: usize = 0,
+    gpu_fine_upload_bytes: usize = 0,
+    packet_capacity_bytes: usize = 0,
+    packet_slack_bytes: usize = 0,
+    max_strip_segments: usize = 0,
 };
 
 const SparseTexture = struct {
@@ -155,6 +177,7 @@ pub const Backend = struct {
             if (profile) |p| &p.fine_profile else null,
         ) catch return false;
         if (profile) |p| p.fine_ns += elapsedSince(fine_start);
+        if (profile) |p| p.frame_packet = self.framePacketStats();
         return true;
     }
 
@@ -190,6 +213,63 @@ pub const Backend = struct {
         for (self.textures.values()) |*texture| {
             self.texture_views.appendAssumeCapacity(texture.view());
         }
+    }
+
+    fn framePacketStats(self: *const Backend) FramePacketStats {
+        var texture_bytes: usize = 0;
+        var texture_capacity_bytes: usize = 0;
+        for (self.textures.values()) |texture| {
+            texture_bytes += texture.pixels.items.len;
+            texture_capacity_bytes += texture.pixels.capacity;
+        }
+
+        var max_strip_segments: usize = 0;
+        for (self.strips.items) |s| {
+            max_strip_segments = @max(max_strip_segments, s.segment_indices.count);
+        }
+
+        const calls_bytes = bytesOf(EncodedCall, self.calls.items.len);
+        const segments_bytes = bytesOf(Segment, self.segments.items.len);
+        const tile_refs_bytes = bytesOf(TileRef, self.tiles.items.len);
+        const strips_bytes = bytesOf(Strip, self.strips.items.len);
+        const strip_indices_bytes = bytesOf(u32, self.strip_segment_indices.items.len);
+        const frame_packet_bytes = calls_bytes +
+            segments_bytes +
+            tile_refs_bytes +
+            strips_bytes +
+            strip_indices_bytes +
+            self.alphas.items.len +
+            self.surface.items.len +
+            texture_bytes;
+        const packet_capacity_bytes = capacityBytes(EncodedCall, self.calls.capacity) +
+            capacityBytes(Segment, self.segments.capacity) +
+            capacityBytes(TileRef, self.tiles.capacity) +
+            capacityBytes(Strip, self.strips.capacity) +
+            capacityBytes(u32, self.strip_segment_indices.capacity) +
+            self.alphas.capacity +
+            self.surface.capacity +
+            texture_capacity_bytes;
+
+        return .{
+            .calls = self.calls.items.len,
+            .segments = self.segments.items.len,
+            .tile_refs = self.tiles.items.len,
+            .strips = self.strips.items.len,
+            .strip_indices = self.strip_segment_indices.items.len,
+            .alpha_bytes = self.alphas.items.len,
+            .surface_bytes = self.surface.items.len,
+            .texture_bytes = texture_bytes,
+            .calls_bytes = calls_bytes,
+            .segments_bytes = segments_bytes,
+            .tile_refs_bytes = tile_refs_bytes,
+            .strips_bytes = strips_bytes,
+            .strip_indices_bytes = strip_indices_bytes,
+            .frame_packet_bytes = frame_packet_bytes,
+            .gpu_fine_upload_bytes = calls_bytes + segments_bytes + strips_bytes + strip_indices_bytes,
+            .packet_capacity_bytes = packet_capacity_bytes,
+            .packet_slack_bytes = packet_capacity_bytes - frame_packet_bytes,
+            .max_strip_segments = max_strip_segments,
+        };
     }
 };
 
@@ -311,6 +391,14 @@ fn bytesPerPixel(format: TexFormat) ?usize {
         .rgba8 => 4,
         .a8 => 1,
     };
+}
+
+fn bytesOf(comptime T: type, count: usize) usize {
+    return @sizeOf(T) * count;
+}
+
+fn capacityBytes(comptime T: type, capacity: usize) usize {
+    return @sizeOf(T) * capacity;
 }
 
 fn profileStart(profile: ?*Profile) u64 {
