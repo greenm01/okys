@@ -20,31 +20,85 @@ pub fn build(
 
     for (calls, 0..) |call, call_index| {
         if (call.segments.count == 0) continue;
-        const bounds = callBounds(call, segments);
-
-        var x0 = std.math.clamp(strip.tileCoord(bounds[0]), 0, max_tile_x);
-        const x1 = std.math.clamp(strip.tileCoord(bounds[2] - 0.001), 0, max_tile_x);
-        var y0 = std.math.clamp(strip.tileCoord(bounds[1]), 0, max_tile_y);
-        const y1 = std.math.clamp(strip.tileCoord(bounds[3] - 0.001), 0, max_tile_y);
-
-        while (y0 <= y1) : (y0 += 1) {
-            x0 = std.math.clamp(strip.tileCoord(bounds[0]), 0, max_tile_x);
-            while (x0 <= x1) : (x0 += 1) {
-                const start: usize = @intCast(call.segments.start);
-                const count: usize = @intCast(call.segments.count);
-                for (0..count) |offset| {
-                    try tiles.append(gpa, .{
-                        .x = @intCast(x0),
-                        .y = @intCast(y0),
-                        .call_index = @intCast(call_index),
-                        .segment_index = @intCast(start + offset),
-                    });
-                }
-            }
+        const start: usize = @intCast(call.segments.start);
+        const count: usize = @intCast(call.segments.count);
+        for (segments[start..][0..count], 0..) |seg, offset| {
+            try appendSegmentTiles(
+                gpa,
+                @intCast(call_index),
+                @intCast(start + offset),
+                seg,
+                max_tile_x,
+                max_tile_y,
+                tiles,
+            );
         }
     }
 
     std.mem.sort(strip.TileRef, tiles.items, {}, lessThan);
+}
+
+fn appendSegmentTiles(
+    gpa: std.mem.Allocator,
+    call_index: u32,
+    segment_index: u32,
+    seg: encode.Segment,
+    max_tile_x: i32,
+    max_tile_y: i32,
+    tiles: *std.ArrayList(strip.TileRef),
+) !void {
+    const min_y = @min(seg.y0, seg.y1);
+    const max_y = @max(seg.y0, seg.y1);
+    if (max_y <= min_y) return;
+
+    var y_tile = std.math.clamp(strip.tileCoord(min_y), 0, max_tile_y);
+    const y_end = std.math.clamp(strip.tileCoord(max_y - 0.001), 0, max_tile_y);
+    const tile_size_f: f32 = @floatFromInt(strip.tile_size);
+
+    while (y_tile <= y_end) : (y_tile += 1) {
+        const row_top = @as(f32, @floatFromInt(y_tile)) * tile_size_f;
+        const row_bottom = row_top + tile_size_f;
+        const y0 = @max(min_y, row_top);
+        const y1 = @min(max_y, row_bottom);
+        if (y0 >= y1) continue;
+
+        const x0 = xAt(seg, y0);
+        const x1 = xAt(seg, y1);
+        const left = @min(x0, x1);
+        const right = @max(x0, x1);
+
+        const x_start = std.math.clamp(tileCoordForStart(left, seg), 0, max_tile_x);
+        const x_end = std.math.clamp(tileCoordForEnd(right, seg), 0, max_tile_x);
+        if (x_start > x_end) continue;
+
+        var x_tile = x_start;
+        while (x_tile <= x_end) : (x_tile += 1) {
+            try tiles.append(gpa, .{
+                .x = @intCast(x_tile),
+                .y = @intCast(y_tile),
+                .call_index = call_index,
+                .segment_index = segment_index,
+                .flags = @intFromBool(seg.winding != 0),
+            });
+        }
+    }
+}
+
+fn xAt(seg: encode.Segment, y: f32) f32 {
+    const dy = seg.y1 - seg.y0;
+    if (dy == 0) return seg.x0;
+    const t = (y - seg.y0) / dy;
+    return seg.x0 + t * (seg.x1 - seg.x0);
+}
+
+fn tileCoordForStart(x: f32, seg: encode.Segment) i32 {
+    if (seg.x0 == seg.x1 and seg.winding < 0) return strip.tileCoord(x - 0.001);
+    return strip.tileCoord(x);
+}
+
+fn tileCoordForEnd(x: f32, seg: encode.Segment) i32 {
+    _ = seg;
+    return strip.tileCoord(x - 0.001);
 }
 
 fn lessThan(_: void, a: strip.TileRef, b: strip.TileRef) bool {
@@ -52,21 +106,4 @@ fn lessThan(_: void, a: strip.TileRef, b: strip.TileRef) bool {
     if (a.x != b.x) return a.x < b.x;
     if (a.call_index != b.call_index) return a.call_index < b.call_index;
     return a.segment_index < b.segment_index;
-}
-
-fn callBounds(call: encode.EncodedCall, segments: []const encode.Segment) [4]f32 {
-    if (call.bounds[0] < call.bounds[2] and call.bounds[1] < call.bounds[3]) {
-        return call.bounds;
-    }
-
-    var bounds = [4]f32{ 1e6, 1e6, -1e6, -1e6 };
-    const start: usize = @intCast(call.segments.start);
-    const count: usize = @intCast(call.segments.count);
-    for (segments[start..][0..count]) |seg| {
-        bounds[0] = @min(bounds[0], @min(seg.x0, seg.x1));
-        bounds[1] = @min(bounds[1], @min(seg.y0, seg.y1));
-        bounds[2] = @max(bounds[2], @max(seg.x0, seg.x1));
-        bounds[3] = @max(bounds[3], @max(seg.y0, seg.y1));
-    }
-    return bounds;
 }

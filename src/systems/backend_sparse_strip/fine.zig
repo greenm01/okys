@@ -35,45 +35,157 @@ pub fn build(
     alphas: *std.ArrayList(u8),
     surface: *std.ArrayList(u8),
 ) !void {
+    _ = strip_segment_indices;
     alphas.clearRetainingCapacity();
     const width = pixelExtent(viewport_width);
     const height = pixelExtent(viewport_height);
     try surface.resize(gpa, @as(usize, width) * @as(usize, height) * 4);
     @memset(surface.items, 0);
 
-    for (strips.items) |*s| {
-        const call = if (s.call_index < calls.len) calls[s.call_index] else null;
-        const call_fill_rule = if (call) |c| fillRuleForCall(fill_rule, c.kind) else fill_rule;
-        const start = alphas.items.len;
-        var local_y: u16 = 0;
-        while (local_y < strip.tile_size) : (local_y += 1) {
-            var local_x: u16 = 0;
-            while (local_x < strip.tile_size) : (local_x += 1) {
-                const alpha = pixelCoverage(
-                    call_fill_rule,
-                    s.x + local_x,
-                    s.y + local_y,
-                    s.segment_indices,
-                    strip_segment_indices,
-                    segments,
-                );
-                try alphas.append(gpa, alpha);
-                if (call) |c| {
-                    compositePaint(
-                        c,
-                        textures,
-                        alpha,
-                        s.x + local_x,
-                        s.y + local_y,
-                        width,
-                        height,
-                        surface.items,
-                    );
-                }
-            }
-        }
-        s.alpha = .{ .start = @intCast(start), .count = strip.tile_area };
+    var boundary_tiles = BoundarySet.init(gpa);
+    defer boundary_tiles.deinit();
+    try boundary_tiles.ensureTotalCapacity(@intCast(strips.items.len));
+    for (strips.items) |s| {
+        try boundary_tiles.put(boundaryKey(s.call_index, strip.tileCoord(@floatFromInt(s.x)), strip.tileCoord(@floatFromInt(s.y))), {});
     }
+
+    for (calls, 0..) |call, call_index| {
+        const call_fill_rule = fillRuleForCall(fill_rule, call.kind);
+        for (strips.items) |*s| {
+            if (s.call_index != call_index) continue;
+            try renderBoundaryStrip(
+                gpa,
+                call,
+                call_fill_rule,
+                textures,
+                segments,
+                alphas,
+                s,
+                width,
+                height,
+                surface.items,
+            );
+        }
+        renderSolidInterior(
+            call,
+            @intCast(call_index),
+            call_fill_rule,
+            textures,
+            segments,
+            &boundary_tiles,
+            width,
+            height,
+            surface.items,
+        );
+    }
+}
+
+const BoundarySet = std.AutoHashMap(u64, void);
+
+fn renderBoundaryStrip(
+    gpa: std.mem.Allocator,
+    call: encode.EncodedCall,
+    fill_rule: strip.FillRule,
+    textures: []const Texture,
+    segments: []const encode.Segment,
+    alphas: *std.ArrayList(u8),
+    s: *strip.Strip,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) !void {
+    const start = alphas.items.len;
+    var local_y: u16 = 0;
+    while (local_y < strip.tile_size) : (local_y += 1) {
+        var local_x: u16 = 0;
+        while (local_x < strip.tile_size) : (local_x += 1) {
+            const alpha = pixelCoverageForCall(
+                fill_rule,
+                s.x + local_x,
+                s.y + local_y,
+                call.segments,
+                segments,
+            );
+            try alphas.append(gpa, alpha);
+            compositePaint(
+                call,
+                textures,
+                alpha,
+                s.x + local_x,
+                s.y + local_y,
+                width,
+                height,
+                surface,
+            );
+        }
+    }
+    s.alpha = .{ .start = @intCast(start), .count = strip.tile_area };
+}
+
+fn renderSolidInterior(
+    call: encode.EncodedCall,
+    call_index: u32,
+    fill_rule: strip.FillRule,
+    textures: []const Texture,
+    segments: []const encode.Segment,
+    boundary_tiles: *const BoundarySet,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) void {
+    if (width == 0 or height == 0) return;
+    const bounds = callBounds(call, segments);
+    if (bounds[0] >= bounds[2] or bounds[1] >= bounds[3]) return;
+
+    const max_tile_x = strip.tileCoord(@as(f32, @floatFromInt(width)) - 0.001);
+    const max_tile_y = strip.tileCoord(@as(f32, @floatFromInt(height)) - 0.001);
+    var tile_y = std.math.clamp(strip.tileCoord(bounds[1]), 0, max_tile_y);
+    const tile_y_end = std.math.clamp(strip.tileCoord(bounds[3] - 0.001), 0, max_tile_y);
+    const tile_size_f: f32 = @floatFromInt(strip.tile_size);
+
+    while (tile_y <= tile_y_end) : (tile_y += 1) {
+        var tile_x = std.math.clamp(strip.tileCoord(bounds[0]), 0, max_tile_x);
+        const tile_x_end = std.math.clamp(strip.tileCoord(bounds[2] - 0.001), 0, max_tile_x);
+        while (tile_x <= tile_x_end) : (tile_x += 1) {
+            if (boundary_tiles.contains(boundaryKey(call_index, tile_x, tile_y))) continue;
+            const sample_x = @as(f32, @floatFromInt(tile_x)) * tile_size_f + 0.5;
+            const sample_y = @as(f32, @floatFromInt(tile_y)) * tile_size_f + 0.5;
+            if (coverageAtForCall(fill_rule, sample_x, sample_y, call.segments, segments) == 0) continue;
+            compositeSolidTile(
+                call,
+                textures,
+                strip.tileOrigin(@intCast(tile_x)),
+                strip.tileOrigin(@intCast(tile_y)),
+                width,
+                height,
+                surface,
+            );
+        }
+    }
+}
+
+fn compositeSolidTile(
+    call: encode.EncodedCall,
+    textures: []const Texture,
+    x: u16,
+    y: u16,
+    width: u32,
+    height: u32,
+    surface: []u8,
+) void {
+    var local_y: u16 = 0;
+    while (local_y < strip.tile_size) : (local_y += 1) {
+        var local_x: u16 = 0;
+        while (local_x < strip.tile_size) : (local_x += 1) {
+            compositePaint(call, textures, 255, x + local_x, y + local_y, width, height, surface);
+        }
+    }
+}
+
+fn boundaryKey(call_index: u32, tile_x: i32, tile_y: i32) u64 {
+    return (@as(u64, call_index) << 42) |
+        (@as(u64, @intCast(tile_y)) << 21) |
+        @as(u64, @intCast(tile_x));
 }
 
 pub fn coverageAt(
@@ -107,6 +219,40 @@ pub fn pixelCoverage(
         area += segmentArea(px, py, segments[segment_index]);
     }
     return areaToAlpha(fill_rule, area);
+}
+
+fn pixelCoverageForCall(
+    fill_rule: strip.FillRule,
+    x: u16,
+    y: u16,
+    range: strip.Range,
+    segments: []const encode.Segment,
+) u8 {
+    var area: f32 = 0;
+    const px: f32 = @floatFromInt(x);
+    const py: f32 = @floatFromInt(y);
+    const start: usize = @intCast(range.start);
+    const count: usize = @intCast(range.count);
+    for (segments[start..][0..count]) |seg| {
+        area += segmentArea(px, py, seg);
+    }
+    return areaToAlpha(fill_rule, area);
+}
+
+fn coverageAtForCall(
+    fill_rule: strip.FillRule,
+    px: f32,
+    py: f32,
+    range: strip.Range,
+    segments: []const encode.Segment,
+) u8 {
+    var winding: i32 = 0;
+    const start: usize = @intCast(range.start);
+    const count: usize = @intCast(range.count);
+    for (segments[start..][0..count]) |seg| {
+        winding += crossingWinding(px, py, seg);
+    }
+    return if (filled(fill_rule, winding)) 255 else 0;
 }
 
 fn windingAt(
@@ -155,6 +301,23 @@ fn fillRuleForCall(default_rule: strip.FillRule, kind: strip.CallKind) strip.Fil
         .fill => default_rule,
         .stroke, .triangles => .nonzero,
     };
+}
+
+fn callBounds(call: encode.EncodedCall, segments: []const encode.Segment) [4]f32 {
+    if (call.bounds[0] < call.bounds[2] and call.bounds[1] < call.bounds[3]) {
+        return call.bounds;
+    }
+
+    var bounds = [4]f32{ 1e6, 1e6, -1e6, -1e6 };
+    const start: usize = @intCast(call.segments.start);
+    const count: usize = @intCast(call.segments.count);
+    for (segments[start..][0..count]) |seg| {
+        bounds[0] = @min(bounds[0], @min(seg.x0, seg.x1));
+        bounds[1] = @min(bounds[1], @min(seg.y0, seg.y1));
+        bounds[2] = @max(bounds[2], @max(seg.x0, seg.x1));
+        bounds[3] = @max(bounds[3], @max(seg.y0, seg.y1));
+    }
+    return bounds;
 }
 
 fn segmentArea(px: f32, py: f32, seg: encode.Segment) f32 {

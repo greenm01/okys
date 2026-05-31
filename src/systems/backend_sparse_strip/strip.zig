@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-pub const tile_size: u16 = 16;
+pub const tile_size: u16 = 4;
 pub const tile_area: u32 = tile_size * tile_size;
 
 pub const FillRule = enum(u8) {
@@ -27,6 +27,7 @@ pub const Strip = extern struct {
     call_index: u32 = 0,
     segment_indices: Range = .{},
     alpha: Range = .{},
+    flags: u32 = 0,
 };
 
 pub const TileRef = extern struct {
@@ -34,6 +35,7 @@ pub const TileRef = extern struct {
     y: u16 = 0,
     call_index: u32 = 0,
     segment_index: u32 = 0,
+    flags: u32 = 0,
 };
 
 pub fn tileCoord(v: f32) i32 {
@@ -48,15 +50,17 @@ comptime {
     std.debug.assert(@sizeOf(Range) == 8);
     std.debug.assert(@offsetOf(Range, "start") == 0);
     std.debug.assert(@offsetOf(Range, "count") == 4);
-    std.debug.assert(@sizeOf(TileRef) == 12);
+    std.debug.assert(@sizeOf(TileRef) == 16);
     std.debug.assert(@offsetOf(TileRef, "x") == 0);
     std.debug.assert(@offsetOf(TileRef, "y") == 2);
     std.debug.assert(@offsetOf(TileRef, "call_index") == 4);
     std.debug.assert(@offsetOf(TileRef, "segment_index") == 8);
-    std.debug.assert(@sizeOf(Strip) == 24);
+    std.debug.assert(@offsetOf(TileRef, "flags") == 12);
+    std.debug.assert(@sizeOf(Strip) == 28);
     std.debug.assert(@offsetOf(Strip, "x") == 0);
     std.debug.assert(@offsetOf(Strip, "y") == 2);
     std.debug.assert(@offsetOf(Strip, "call_index") == 4);
     std.debug.assert(@offsetOf(Strip, "segment_indices") == 8);
     std.debug.assert(@offsetOf(Strip, "alpha") == 16);
+    std.debug.assert(@offsetOf(Strip, "flags") == 24);
 }

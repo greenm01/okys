@@ -60,7 +60,7 @@ test "sparse encode preserves call range and convex hint for rect" {
     try testing.expectEqual(@as(u32, 0), backend.segments.items[0].path_index);
 }
 
-test "sparse binning emits one strip per covered call tile" {
+test "sparse binning emits segment-local boundary tiles" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -70,15 +70,16 @@ test "sparse binning emits one strip per covered call tile" {
     try testing.expect(backend.build());
 
     try testing.expectEqual(@as(usize, 16), backend.tiles.items.len);
-    try testing.expectEqual(@as(usize, 4), backend.strips.items.len);
+    try testing.expectEqual(@as(usize, 16), backend.strips.items.len);
     try testing.expectEqual(@as(u16, 0), backend.strips.items[0].x);
     try testing.expectEqual(@as(u16, 0), backend.strips.items[0].y);
-    try testing.expectEqual(@as(u16, 16), backend.strips.items[1].x);
-    try testing.expectEqual(@as(u16, 0), backend.strips.items[1].y);
-    try testing.expectEqual(@as(u32, 4), backend.strips.items[0].segment_indices.count);
+    try testing.expect(findStrip(backend, 28, 0, 0) != null);
+    try testing.expect(findStrip(backend, 0, 28, 0) != null);
+    try testing.expect(findStrip(backend, 28, 28, 0) != null);
+    try testing.expectEqual(@as(u32, 1), backend.strips.items[0].segment_indices.count);
 }
 
-test "sparse fine stage covers solid rect interior and leaves exterior empty" {
+test "sparse fine stage covers solid rect interior through solid spans" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -87,11 +88,10 @@ test "sparse fine stage covers solid rect interior and leaves exterior empty" {
     queueRect(&iface, 4, 4, 12, 12);
     try testing.expect(backend.build());
 
-    try testing.expectEqual(@as(usize, 1), backend.strips.items.len);
-    const strip = backend.strips.items[0];
-    try testing.expectEqual(sparse.strip.tile_area, strip.alpha.count);
-    try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 8, 8));
-    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 1, 1));
+    try testing.expect(backend.strips.items.len > 0);
+    try testing.expectEqual(sparse.strip.tile_area, backend.strips.items[0].alpha.count);
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, rgbaAt(backend, 8, 8));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 1, 1));
 }
 
 test "sparse fine stage uses analytic subpixel coverage" {
@@ -103,11 +103,13 @@ test "sparse fine stage uses analytic subpixel coverage" {
     queueRect(&iface, 4.25, 4.25, 12.25, 12.25);
     try testing.expect(backend.build());
 
-    const strip = findStrip(backend, 0, 0, 0).?;
-    try expectAlphaApprox(143, alphaAt(backend, strip, 4, 4));
-    try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 5, 5));
-    try expectAlphaApprox(16, alphaAt(backend, strip, 12, 12));
-    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 3, 4));
+    const left_top = findStrip(backend, 4, 4, 0).?;
+    try expectAlphaApprox(143, alphaAt(backend, left_top, 4, 4));
+    try testing.expectEqual(@as(u8, 255), alphaAt(backend, left_top, 5, 5));
+
+    const right_bottom = findStrip(backend, 12, 12, 0).?;
+    try expectAlphaApprox(16, alphaAt(backend, right_bottom, 12, 12));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 3, 4));
 }
 
 test "sparse even odd coverage cuts a hole from nested paths" {
@@ -135,9 +137,8 @@ test "sparse even odd coverage cuts a hole from nested paths" {
     iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 2, 2, 18, 18 }, &paths, &points);
     try testing.expect(backend.build());
 
-    const strip = findStrip(backend, 0, 0, 0).?;
-    try testing.expectEqual(@as(u8, 255), alphaAt(backend, strip, 4, 4));
-    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 10, 10));
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, rgbaAt(backend, 4, 4));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 10, 10));
 }
 
 test "sparse even odd coverage folds self-overlapping path area" {
@@ -162,8 +163,7 @@ test "sparse even odd coverage folds self-overlapping path area" {
     iface.fill(iface.ctx, &paint, &disabled_scissor, .{ 4, 4, 18, 18 }, &paths, &points);
     try testing.expect(backend.build());
 
-    const strip = findStrip(backend, 0, 0, 0).?;
-    try testing.expectEqual(@as(u8, 0), alphaAt(backend, strip, 8, 8));
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, rgbaAt(backend, 8, 8));
 }
 
 test "sparse solid paint composites into proof surface" {
