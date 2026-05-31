@@ -21,6 +21,14 @@ pub const DrawCall = struct {
     points_ptr: usize = 0,
 };
 
+pub const TriangleCall = struct {
+    paint: Paint = undefined,
+    scissor: Scissor = undefined,
+    vertex_count: usize = 0,
+    verts_ptr: usize = 0,
+    first_vertex: Vertex = .{ .x = 0, .y = 0, .u = 0, .v = 0 },
+};
+
 pub const ClipCall = struct {
     rule: ClipRule = .nonzero,
     bounds: [4]f32 = .{ 0, 0, 0, 0 },
@@ -62,6 +70,7 @@ pub const MockBackend = struct {
     last_deleted_id: ImageId = .none,
     last_fill: DrawCall = .{},
     last_stroke: DrawCall = .{},
+    last_triangles: TriangleCall = .{},
     last_clip: ClipCall = .{},
 
     pub fn interface(self: *MockBackend) RenderInterface {
@@ -150,10 +159,15 @@ pub const MockBackend = struct {
     }
 
     fn triangles(ctx: *anyopaque, paint: *const Paint, scissor: *const Scissor, verts: []const Vertex) void {
-        _ = paint;
-        _ = scissor;
-        _ = verts;
-        from(ctx).triangles_calls += 1;
+        const self = from(ctx);
+        self.triangles_calls += 1;
+        self.last_triangles = .{
+            .paint = paint.*,
+            .scissor = scissor.*,
+            .vertex_count = verts.len,
+            .verts_ptr = if (verts.len > 0) @intFromPtr(verts.ptr) else 0,
+            .first_vertex = if (verts.len > 0) verts[0] else .{ .x = 0, .y = 0, .u = 0, .v = 0 },
+        };
     }
 
     fn pushClipPath(ctx: *anyopaque, rule: ClipRule, bounds: [4]f32, paths: []const PathRange, points: []const Point) void {

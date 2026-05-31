@@ -7,6 +7,7 @@ pub const types = struct {
     pub const command = @import("types/command.zig");
     pub const path = @import("types/path.zig");
     pub const image = @import("types/image.zig");
+    pub const text = @import("types/text.zig");
 };
 
 pub const state = struct {
@@ -16,6 +17,7 @@ pub const state = struct {
     pub const draw_state = @import("state/draw_state.zig");
     pub const frame_profile = @import("state/frame_profile.zig");
     pub const textures = @import("state/textures.zig");
+    pub const glyph_atlas = @import("state/glyph_atlas.zig");
     pub const context = @import("state/context.zig");
 };
 
@@ -26,6 +28,7 @@ pub const ops = struct {
     pub const render = @import("ops/render_ops.zig");
     pub const state = @import("ops/state_ops.zig");
     pub const image = @import("ops/image_ops.zig");
+    pub const text = @import("ops/text_ops.zig");
 };
 
 pub const systems = struct {
