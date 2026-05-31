@@ -3,6 +3,8 @@ const sokol = @import("sokol");
 const okys = @import("okys");
 
 const app = sokol.app;
+const debugtext = sokol.debugtext;
+const gfx = sokol.gfx;
 const glue = sokol.glue;
 
 const color = okys.types.color;
@@ -24,6 +26,30 @@ const scene_width: f32 = 960;
 const scene_height: f32 = 640;
 const checker_size = 16;
 const checker_square = 4;
+const timing_window_len = 60;
+
+const TimingWindow = struct {
+    samples: [timing_window_len]u64 = @splat(0),
+    index: usize = 0,
+    count: usize = 0,
+    total: u128 = 0,
+
+    fn add(self: *TimingWindow, value: u64) void {
+        if (self.count < self.samples.len) {
+            self.count += 1;
+        } else {
+            self.total -= self.samples[self.index];
+        }
+        self.samples[self.index] = value;
+        self.total += value;
+        self.index = (self.index + 1) % self.samples.len;
+    }
+
+    fn average(self: *const TimingWindow) u64 {
+        if (self.count == 0) return 0;
+        return @intCast(self.total / self.count);
+    }
+};
 
 var device: sokol_device.Device = .{};
 var stencil_ctx: ?*Context = null;
@@ -34,6 +60,8 @@ var sparse_backend: ?*SparseBackend = null;
 var sparse_checker_image: ImageId = .none;
 var sparse_gpu_packet: okys.systems.backend_sparse_strip.GpuFinePacket = .{};
 var sparse_device_textures: std.ArrayList(sokol_device.PathTexture) = .empty;
+var sparse_timing: sokol_device.SparseFineSubmitTiming = .{};
+var sparse_submit_window: TimingWindow = .{};
 
 pub fn main() void {
     app.run(.{
@@ -49,6 +77,11 @@ pub fn main() void {
 
 fn init() callconv(.c) void {
     device = sokol_device.Device.initOwned(.{ .environment = glue.environment() });
+    var debug_desc: debugtext.Desc = .{};
+    debug_desc.fonts[0] = debugtext.fontKc853();
+    debug_desc.context.max_commands = 512;
+    debug_desc.context.char_buf_size = 4096;
+    debugtext.setup(debug_desc);
 
     const stencil_c = Context.create(std.heap.c_allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES) catch {
         app.requestQuit();
@@ -107,8 +140,9 @@ fn frame() callconv(.c) void {
     drawScene(bottom_c, sparse_checker_image);
     const blit_pass = sokol_device.swapchainPassWithAction(sokol_device.loadPassAction(), glue.swapchain());
     var drew_sparse = false;
+    sparse_timing = .{};
     if (bottom_b.buildGpuFinePacket(&sparse_gpu_packet, null)) {
-        drew_sparse = device.drawSparseFineSurface(
+        drew_sparse = device.drawSparseFineSurfaceTimed(
             blit_pass,
             &sparse_gpu_packet,
             bottom_b.segments.items,
@@ -123,8 +157,12 @@ fn frame() callconv(.c) void {
             },
             width,
             height,
+            &sparse_timing,
         );
+    } else {
+        sparse_timing.fallback = .unsupported_packet;
     }
+    if (drew_sparse) sparse_submit_window.add(sparse_timing.total_ns);
     if (!drew_sparse and bottom_b.build()) {
         device.drawRgbaSurface(
             blit_pass,
@@ -141,6 +179,7 @@ fn frame() callconv(.c) void {
             height,
         );
     }
+    drawHud(width, height);
 
     top_b.clearQueued();
     bottom_b.clearQueued();
@@ -162,7 +201,64 @@ fn cleanup() callconv(.c) void {
     }
     sparse_gpu_packet.deinit(std.heap.c_allocator);
     sparse_device_textures.deinit(std.heap.c_allocator);
+    debugtext.shutdown();
     device.deinit();
+}
+
+fn drawHud(width: f32, height: f32) void {
+    debugtext.canvas(width, height);
+    debugtext.origin(1, 1);
+    debugtext.home();
+    debugtext.color4b(245, 248, 252, 235);
+
+    hudLine("sparse fine: submit avg {d:.2} us, last {d:.2} us", .{
+        nsToUs(sparse_submit_window.average()),
+        nsToUs(sparse_timing.total_ns),
+    });
+    hudLine("resource/upload/compute/blit: {d:.2} / {d:.2} / {d:.2} / {d:.2} us", .{
+        nsToUs(sparse_timing.resource_ns),
+        nsToUs(sparse_timing.upload_ns),
+        nsToUs(sparse_timing.compute_encode_ns),
+        nsToUs(sparse_timing.blit_encode_ns),
+    });
+    hudLine("packet: {d} calls, {d} tasks, {d} dispatches, {d:.1} KB upload", .{
+        sparse_timing.calls,
+        sparse_timing.tasks,
+        sparse_timing.dispatches,
+        bytesToKb(sparse_timing.upload_bytes),
+    });
+    hudLine("fallback: {s}", .{fallbackName(sparse_timing.fallback)});
+
+    const hud_pass = sokol_device.swapchainPassWithAction(sokol_device.loadPassAction(), glue.swapchain());
+    device.beginPass(hud_pass);
+    debugtext.draw();
+    gfx.endPass();
+}
+
+fn hudLine(comptime fmt: []const u8, args: anytype) void {
+    var buf: [256:0]u8 = undefined;
+    const line = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    debugtext.puts(line);
+    debugtext.crlf();
+}
+
+fn nsToUs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1000.0;
+}
+
+fn bytesToKb(bytes: usize) f64 {
+    return @as(f64, @floatFromInt(bytes)) / 1024.0;
+}
+
+fn fallbackName(fallback: sokol_device.SparseFineFallback) []const u8 {
+    return switch (fallback) {
+        .none => "none",
+        .unsupported_packet => "unsupported_packet",
+        .empty_surface => "empty_surface",
+        .empty_packet => "empty_packet",
+        .missing_texture => "missing_texture",
+        .missing_resources => "missing_resources",
+    };
 }
 
 fn sparseTexturesForDevice(backend: *SparseBackend) []const sokol_device.PathTexture {

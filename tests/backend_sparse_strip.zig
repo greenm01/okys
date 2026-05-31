@@ -69,14 +69,31 @@ test "sparse binning emits segment-local boundary tiles" {
     queueRect(&iface, 0, 0, 32, 32);
     try testing.expect(backend.build());
 
-    try testing.expectEqual(@as(usize, 16), backend.tiles.items.len);
-    try testing.expectEqual(@as(usize, 16), backend.strips.items.len);
+    try testing.expectEqual(@as(usize, 32), backend.tiles.items.len);
+    try testing.expectEqual(@as(usize, 28), backend.strips.items.len);
     try testing.expectEqual(@as(u16, 0), backend.strips.items[0].x);
     try testing.expectEqual(@as(u16, 0), backend.strips.items[0].y);
+    try testing.expect(findStrip(backend, 12, 0, 0) != null);
     try testing.expect(findStrip(backend, 28, 0, 0) != null);
     try testing.expect(findStrip(backend, 0, 28, 0) != null);
+    try testing.expect(findStrip(backend, 12, 28, 0) != null);
     try testing.expect(findStrip(backend, 28, 28, 0) != null);
-    try testing.expectEqual(@as(u32, 1), backend.strips.items[0].segment_indices.count);
+    try testing.expectEqual(@as(u32, 2), backend.strips.items[0].segment_indices.count);
+}
+
+test "sparse binning treats horizontal-only edge tiles as analytic boundaries" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, 4.25, 4.25, 20.25, 20.25);
+    try testing.expect(backend.build());
+
+    try testing.expect(findStrip(backend, 8, 4, 0) != null);
+    try testing.expect(findStrip(backend, 12, 4, 0) != null);
+    try testing.expect(findStrip(backend, 8, 20, 0) != null);
+    try testing.expect(findStrip(backend, 12, 20, 0) != null);
 }
 
 test "sparse fine stage covers solid rect interior through solid spans" {
@@ -143,9 +160,9 @@ test "sparse profiled build reports fine-stage work counters" {
     try testing.expectEqual(@as(usize, 0), packet.clipped_out_calls);
     try testing.expectEqual(@as(usize, 1), packet.fill_box_candidate_calls);
     try testing.expectEqual(@as(usize, 4), packet.max_segments_per_call);
-    try testing.expectEqual(@as(usize, 4), packet.max_tile_refs_per_call);
-    try testing.expectEqual(@as(usize, 4), packet.max_strips_per_call);
-    try testing.expectEqual(@as(usize, 64), packet.max_alpha_bytes_per_call);
+    try testing.expectEqual(@as(usize, 12), packet.max_tile_refs_per_call);
+    try testing.expectEqual(@as(usize, 11), packet.max_strips_per_call);
+    try testing.expectEqual(@as(usize, 176), packet.max_alpha_bytes_per_call);
     try testing.expectEqual(@as(usize, 0), packet.dense_strip_warnings);
     try testing.expectEqual(sparse.gpu_fine_upload_warning_bytes, packet.upload_budget_bytes);
     try testing.expectEqual(@as(usize, 0), packet.upload_budget_warnings);

@@ -49,7 +49,10 @@ fn appendSegmentTiles(
 ) !void {
     const min_y = @min(seg.y0, seg.y1);
     const max_y = @max(seg.y0, seg.y1);
-    if (max_y <= min_y) return;
+    if (max_y <= min_y) {
+        try appendHorizontalSegmentTiles(gpa, call_index, segment_index, seg, max_tile_x, max_tile_y, tiles);
+        return;
+    }
 
     var y_tile = std.math.clamp(strip.tileCoord(min_y), 0, max_tile_y);
     const y_end = std.math.clamp(strip.tileCoord(max_y - 0.001), 0, max_tile_y);
@@ -81,6 +84,40 @@ fn appendSegmentTiles(
                 .flags = @intFromBool(seg.winding != 0),
             });
         }
+    }
+}
+
+fn appendHorizontalSegmentTiles(
+    gpa: std.mem.Allocator,
+    call_index: u32,
+    segment_index: u32,
+    seg: encode.Segment,
+    max_tile_x: i32,
+    max_tile_y: i32,
+    tiles: *std.ArrayList(strip.TileRef),
+) !void {
+    if (seg.x0 == seg.x1) return;
+
+    const left = @min(seg.x0, seg.x1);
+    const right = @max(seg.x0, seg.x1);
+    const frame_width = @as(f32, @floatFromInt(max_tile_x + 1)) * @as(f32, @floatFromInt(strip.tile_size));
+    const frame_height = @as(f32, @floatFromInt(max_tile_y + 1)) * @as(f32, @floatFromInt(strip.tile_size));
+    if (right <= 0 or left >= frame_width or seg.y0 < 0 or seg.y0 >= frame_height) return;
+
+    const x_start = std.math.clamp(strip.tileCoord(left), 0, max_tile_x);
+    const x_end = std.math.clamp(strip.tileCoord(right - 0.001), 0, max_tile_x);
+    if (x_start > x_end) return;
+
+    const y_tile = std.math.clamp(strip.tileCoord(seg.y0 - 0.001), 0, max_tile_y);
+    var x_tile = x_start;
+    while (x_tile <= x_end) : (x_tile += 1) {
+        try tiles.append(gpa, .{
+            .x = @intCast(x_tile),
+            .y = @intCast(y_tile),
+            .call_index = call_index,
+            .segment_index = segment_index,
+            .flags = 0,
+        });
     }
 }
 

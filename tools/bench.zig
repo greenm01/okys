@@ -1,7 +1,7 @@
 const std = @import("std");
 const okys = @import("okys");
+const bench_scenes = @import("bench_scenes.zig");
 
-const color = okys.types.color;
 const ImageId = okys.types.image.ImageId;
 const CapturedFrame = okys.render.frame_capture.CapturedFrame;
 const Context = okys.state.context.Context;
@@ -19,26 +19,19 @@ const StencilPath = okys.systems.backend_stencil.QueuedPath;
 const StencilUniform = okys.systems.backend_stencil.PaintUniform;
 const Vertex = okys.types.path.Vertex;
 const frame_ops = okys.ops.frame;
-const image_ops = okys.ops.image;
-const paint_ops = okys.ops.paint;
-const path_ops = okys.ops.path;
-const render_ops = okys.ops.render;
-const state_ops = okys.ops.state;
 
-const OKY_ANTIALIAS: u32 = 1 << 0;
-const OKY_STENCIL_STROKES: u32 = 1 << 1;
+const OKY_ANTIALIAS = bench_scenes.oky_antialias;
+const OKY_STENCIL_STROKES = bench_scenes.oky_stencil_strokes;
 
 const warmup_iterations: usize = 5;
 const measured_iterations: usize = 50;
-const scene_width: f32 = 960;
-const scene_height: f32 = 640;
-const checker_size = 16;
-const checker_square = 4;
+const scene_width = bench_scenes.scene_width;
+const scene_height = bench_scenes.scene_height;
 
 const Scene = struct {
     name: []const u8,
     frame: *const CapturedFrame,
-    draw: *const fn (*Context, ImageId) void,
+    draw: bench_scenes.SceneDraw,
 };
 
 const Stats = struct {
@@ -127,20 +120,20 @@ const Result = struct {
 pub fn main() !void {
     const gpa = std.heap.c_allocator;
 
-    var mixed = try captureScene(gpa, drawMixedScene);
+    var mixed = try bench_scenes.captureScene(gpa, bench_scenes.drawMixedScene);
     defer mixed.deinit();
-    var rounded_grid = try captureScene(gpa, drawRoundedGridScene);
+    var rounded_grid = try bench_scenes.captureScene(gpa, bench_scenes.drawRoundedGridScene);
     defer rounded_grid.deinit();
-    var arcs_icons = try captureScene(gpa, drawArcsIconsScene);
+    var arcs_icons = try bench_scenes.captureScene(gpa, bench_scenes.drawArcsIconsScene);
     defer arcs_icons.deinit();
-    var scissors = try captureScene(gpa, drawScissorScene);
+    var scissors = try bench_scenes.captureScene(gpa, bench_scenes.drawScissorScene);
     defer scissors.deinit();
 
     const scenes = [_]Scene{
-        .{ .name = "mixed_demo", .frame = &mixed, .draw = drawMixedScene },
-        .{ .name = "rounded_rect_grid", .frame = &rounded_grid, .draw = drawRoundedGridScene },
-        .{ .name = "arcs_icons", .frame = &arcs_icons, .draw = drawArcsIconsScene },
-        .{ .name = "nested_scissors", .frame = &scissors, .draw = drawScissorScene },
+        .{ .name = bench_scenes.specs[0].name, .frame = &mixed, .draw = bench_scenes.specs[0].draw },
+        .{ .name = bench_scenes.specs[1].name, .frame = &rounded_grid, .draw = bench_scenes.specs[1].draw },
+        .{ .name = bench_scenes.specs[2].name, .frame = &arcs_icons, .draw = bench_scenes.specs[2].draw },
+        .{ .name = bench_scenes.specs[3].name, .frame = &scissors, .draw = bench_scenes.specs[3].draw },
     };
 
     printHeader();
@@ -156,22 +149,7 @@ pub fn main() !void {
     }
 }
 
-fn captureScene(gpa: std.mem.Allocator, draw: *const fn (*Context, ImageId) void) !CapturedFrame {
-    var frame = CapturedFrame.init(gpa);
-    errdefer frame.deinit();
-
-    const ctx = try Context.create(gpa, OKY_ANTIALIAS | OKY_STENCIL_STROKES);
-    defer ctx.destroy();
-    ctx.installBackend(frame.interface());
-
-    frame_ops.beginFrame(ctx, scene_width, scene_height, 1);
-    const image_id = createCheckerImage(ctx);
-    draw(ctx, image_id);
-    frame_ops.cancelFrame(ctx);
-    return frame;
-}
-
-fn benchFrontend(gpa: std.mem.Allocator, draw: *const fn (*Context, ImageId) void) !Result {
+fn benchFrontend(gpa: std.mem.Allocator, draw: bench_scenes.SceneDraw) !Result {
     var frame = CapturedFrame.init(gpa);
     defer frame.deinit();
     const ctx = try Context.create(gpa, OKY_ANTIALIAS | OKY_STENCIL_STROKES);
@@ -590,215 +568,4 @@ fn cString(value: []const u8) [*c]const u8 {
 
 fn u64ForPrint(value: anytype) c_ulonglong {
     return @intCast(value);
-}
-
-fn createCheckerImage(c: *Context) ImageId {
-    var pixels: [checker_size * checker_size * 4]u8 = undefined;
-    var y: usize = 0;
-    while (y < checker_size) : (y += 1) {
-        var x: usize = 0;
-        while (x < checker_size) : (x += 1) {
-            const dark = ((x / checker_square) + (y / checker_square)) % 2 == 0;
-            const index = (y * checker_size + x) * 4;
-            if (dark) {
-                pixels[index + 0] = 40;
-                pixels[index + 1] = 80;
-                pixels[index + 2] = 160;
-            } else {
-                pixels[index + 0] = 255;
-                pixels[index + 1] = 255;
-                pixels[index + 2] = 255;
-            }
-            pixels[index + 3] = 255;
-        }
-    }
-    return image_ops.createImageRGBA(c, checker_size, checker_size, &pixels);
-}
-
-fn drawMixedScene(c: *Context, image_id: ImageId) void {
-    paint_ops.fillColor(c, color.rgbaf(0.14, 0.15, 0.16, 1.0));
-    path_ops.beginPath(c);
-    path_ops.rect(c, 0, 0, scene_width, scene_height);
-    render_ops.fill(c);
-
-    paint_ops.fillColor(c, color.rgbaf(0.20, 0.58, 0.86, 1.0));
-    path_ops.beginPath(c);
-    path_ops.roundedRect(c, 48, 48, 190, 110, 18);
-    render_ops.fill(c);
-
-    paint_ops.fillPaint(c, paint_ops.linearGradient(
-        c,
-        280,
-        52,
-        520,
-        160,
-        color.rgbaf(1.0, 0.72, 0.20, 1.0),
-        color.rgbaf(0.82, 0.18, 0.46, 1.0),
-    ));
-    path_ops.beginPath(c);
-    path_ops.moveTo(c, 292, 150);
-    path_ops.bezierTo(c, 330, 36, 480, 36, 525, 145);
-    path_ops.lineTo(c, 426, 204);
-    path_ops.closePath(c);
-    render_ops.fill(c);
-
-    paint_ops.fillColor(c, color.rgbaf(0.64, 0.86, 0.35, 0.92));
-    path_ops.beginPath(c);
-    path_ops.rect(c, 580, 54, 210, 140);
-    path_ops.rect(c, 636, 88, 100, 72);
-    render_ops.fill(c);
-
-    if (image_id != .none) {
-        paint_ops.fillPaint(c, paint_ops.imagePattern(c, 58, 238, 96, 96, 0.2, @intCast(@intFromEnum(image_id)), 0.9));
-        path_ops.beginPath(c);
-        path_ops.roundedRect(c, 48, 228, 180, 120, 16);
-        render_ops.fill(c);
-    }
-
-    state_ops.save(c);
-    state_ops.scissor(c, 282, 230, 250, 120);
-    paint_ops.fillPaint(c, paint_ops.boxGradient(
-        c,
-        270,
-        220,
-        270,
-        140,
-        28,
-        38,
-        color.rgbaf(0.94, 0.94, 0.98, 1.0),
-        color.rgbaf(0.16, 0.40, 0.70, 0.85),
-    ));
-    path_ops.beginPath(c);
-    path_ops.circle(c, 338, 286, 74);
-    path_ops.circle(c, 476, 286, 74);
-    render_ops.fill(c);
-    state_ops.restore(c);
-
-    paint_ops.strokeColor(c, color.rgbaf(0.94, 0.94, 0.90, 1.0));
-    state_ops.strokeWidth(c, 10);
-    state_ops.lineJoin(c, .round);
-    state_ops.lineCap(c, .round);
-    path_ops.beginPath(c);
-    path_ops.moveTo(c, 590, 265);
-    path_ops.lineTo(c, 660, 225);
-    path_ops.lineTo(c, 735, 310);
-    path_ops.bezierTo(c, 780, 360, 850, 250, 890, 318);
-    render_ops.stroke(c);
-
-    paint_ops.strokeColor(c, color.rgbaf(0.95, 0.30, 0.22, 0.75));
-    state_ops.strokeWidth(c, 0.55);
-    state_ops.lineCap(c, .square);
-    path_ops.beginPath(c);
-    path_ops.moveTo(c, 58, 410);
-    path_ops.lineTo(c, 900, 414);
-    render_ops.stroke(c);
-    path_ops.beginPath(c);
-    path_ops.moveTo(c, 58, 418);
-    path_ops.lineTo(c, 900, 422);
-    render_ops.stroke(c);
-}
-
-fn drawRoundedGridScene(c: *Context, image_id: ImageId) void {
-    paint_ops.fillColor(c, color.rgbaf(0.12, 0.13, 0.14, 1.0));
-    path_ops.beginPath(c);
-    path_ops.rect(c, 0, 0, scene_width, scene_height);
-    render_ops.fill(c);
-
-    var row: usize = 0;
-    while (row < 9) : (row += 1) {
-        var col: usize = 0;
-        while (col < 12) : (col += 1) {
-            const x = 28 + f32FromInt(col) * 76;
-            const y = 28 + f32FromInt(row) * 66;
-            const shade = 0.18 + f32FromInt((row + col) % 5) * 0.035;
-            paint_ops.fillColor(c, color.rgbaf(shade, 0.30 + shade, 0.42 + shade, 0.95));
-            path_ops.beginPath(c);
-            path_ops.roundedRect(c, x, y, 58, 42, 9 + f32FromInt((row + col) % 4));
-            render_ops.fill(c);
-        }
-    }
-
-    if (image_id != .none) {
-        paint_ops.fillPaint(c, paint_ops.imagePattern(c, 650, 80, 120, 120, 0.4, @intCast(@intFromEnum(image_id)), 0.55));
-        path_ops.beginPath(c);
-        path_ops.roundedRect(c, 632, 68, 220, 148, 24);
-        render_ops.fill(c);
-    }
-}
-
-fn drawArcsIconsScene(c: *Context, _: ImageId) void {
-    paint_ops.fillColor(c, color.rgbaf(0.11, 0.12, 0.13, 1.0));
-    path_ops.beginPath(c);
-    path_ops.rect(c, 0, 0, scene_width, scene_height);
-    render_ops.fill(c);
-
-    var i: usize = 0;
-    while (i < 80) : (i += 1) {
-        const col = i % 10;
-        const row = i / 10;
-        const cx = 64 + f32FromInt(col) * 88;
-        const cy = 58 + f32FromInt(row) * 68;
-        const r = 18 + f32FromInt(i % 5);
-
-        paint_ops.fillColor(c, color.rgbaf(0.20 + f32FromInt(i % 3) * 0.08, 0.56, 0.70, 0.85));
-        path_ops.beginPath(c);
-        path_ops.circle(c, cx, cy, r);
-        path_ops.circle(c, cx, cy, r * 0.45);
-        render_ops.fill(c);
-
-        paint_ops.strokeColor(c, color.rgbaf(0.94, 0.90, 0.76, 0.9));
-        state_ops.strokeWidth(c, 3 + f32FromInt(i % 4));
-        state_ops.lineCap(c, .round);
-        path_ops.beginPath(c);
-        path_ops.arc(c, cx, cy, r + 8, 0.2, std.math.pi * (1.1 + f32FromInt(i % 4) * 0.1), .cw);
-        render_ops.stroke(c);
-    }
-}
-
-fn drawScissorScene(c: *Context, image_id: ImageId) void {
-    paint_ops.fillColor(c, color.rgbaf(0.13, 0.14, 0.15, 1.0));
-    path_ops.beginPath(c);
-    path_ops.rect(c, 0, 0, scene_width, scene_height);
-    render_ops.fill(c);
-
-    var i: usize = 0;
-    while (i < 24) : (i += 1) {
-        const x = 36 + f32FromInt(i % 6) * 150;
-        const y = 34 + f32FromInt(i / 6) * 138;
-
-        state_ops.save(c);
-        state_ops.scissor(c, x, y, 116, 104);
-        state_ops.intersectScissor(c, x + 14, y + 12, 84, 76);
-
-        if (image_id != .none and i % 3 == 0) {
-            paint_ops.fillPaint(c, paint_ops.imagePattern(c, x - 10, y - 10, 72, 72, 0.1 * f32FromInt(i % 5), @intCast(@intFromEnum(image_id)), 0.8));
-        } else {
-            paint_ops.fillPaint(c, paint_ops.linearGradient(
-                c,
-                x,
-                y,
-                x + 100,
-                y + 90,
-                color.rgbaf(0.85, 0.34, 0.38, 0.9),
-                color.rgbaf(0.20, 0.46, 0.82, 0.9),
-            ));
-        }
-        path_ops.beginPath(c);
-        path_ops.roundedRect(c, x - 8, y - 4, 138, 112, 20);
-        render_ops.fill(c);
-
-        paint_ops.strokeColor(c, color.rgbaf(0.96, 0.94, 0.84, 0.78));
-        state_ops.strokeWidth(c, 4);
-        state_ops.lineJoin(c, .round);
-        state_ops.lineCap(c, .round);
-        path_ops.beginPath(c);
-        path_ops.moveTo(c, x - 8, y + 80);
-        path_ops.bezierTo(c, x + 28, y + 20, x + 78, y + 128, x + 132, y + 24);
-        render_ops.stroke(c);
-        state_ops.restore(c);
-    }
-}
-
-fn f32FromInt(value: usize) f32 {
-    return @floatFromInt(value);
 }

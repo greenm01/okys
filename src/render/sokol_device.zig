@@ -39,7 +39,6 @@ pub const SparseFineParams = sparse_fine_shader.FineParams;
 pub const sparse_clear_surface_view_slot = sparse_fine_shader.VIEW_clear_surface_img;
 pub const sparse_calls_view_slot = sparse_fine_shader.VIEW_calls_buf;
 pub const sparse_segments_view_slot = sparse_fine_shader.VIEW_segments_buf;
-pub const sparse_strip_indices_view_slot = sparse_fine_shader.VIEW_strip_indices_buf;
 pub const sparse_tasks_view_slot = sparse_fine_shader.VIEW_tasks_buf;
 pub const sparse_fine_surface_view_slot = sparse_fine_shader.VIEW_fine_surface_img;
 pub const sparse_image_view_slot = sparse_fine_shader.VIEW_image_tex;
@@ -63,6 +62,29 @@ pub const PathFsParams = path_shader.FsParams;
 pub const max_path_textures = 64;
 
 const path_default_texture_pixels = [_]u8{ 255, 255, 255, 255 };
+
+pub const SparseFineFallback = enum {
+    none,
+    unsupported_packet,
+    empty_surface,
+    empty_packet,
+    missing_texture,
+    missing_resources,
+};
+
+pub const SparseFineSubmitTiming = struct {
+    ok: bool = false,
+    fallback: SparseFineFallback = .none,
+    total_ns: u64 = 0,
+    resource_ns: u64 = 0,
+    upload_ns: u64 = 0,
+    compute_encode_ns: u64 = 0,
+    blit_encode_ns: u64 = 0,
+    calls: usize = 0,
+    tasks: usize = 0,
+    dispatches: usize = 0,
+    upload_bytes: usize = 0,
+};
 
 pub const PathPipelineKind = enum {
     stencil_nonzero,
@@ -197,7 +219,6 @@ pub const Device = struct {
     sparse_surface_height: u32 = 0,
     sparse_call_buffer: StorageBufferResource = .{},
     sparse_segment_buffer: StorageBufferResource = .{},
-    sparse_strip_index_buffer: StorageBufferResource = .{},
     sparse_task_buffer: StorageBufferResource = .{},
 
     pub fn initOwned(desc: Desc) Device {
@@ -337,24 +358,86 @@ pub const Device = struct {
         view_width: f32,
         view_height: f32,
     ) bool {
-        if (!packet.stats.supported) return false;
-        if (surface_width == 0 or surface_height == 0) return false;
-        if (packet.calls.items.len == 0) return false;
-        if (packet.tasks.items.len == 0) return false;
+        var timing: SparseFineSubmitTiming = .{};
+        return self.drawSparseFineSurfaceTimed(
+            pass,
+            packet,
+            segments,
+            textures,
+            surface_width,
+            surface_height,
+            dest,
+            view_width,
+            view_height,
+            &timing,
+        );
+    }
 
+    pub fn drawSparseFineSurfaceTimed(
+        self: *Device,
+        pass: Pass,
+        packet: *const gpu_fine.Packet,
+        segments: []const sparse_encode.Segment,
+        textures: []const PathTexture,
+        surface_width: u32,
+        surface_height: u32,
+        dest: BlitRect,
+        view_width: f32,
+        view_height: f32,
+        timing: *SparseFineSubmitTiming,
+    ) bool {
+        const total_start = nowNs();
+        timing.* = .{
+            .calls = packet.calls.items.len,
+            .tasks = packet.tasks.items.len,
+            .dispatches = packet.stats.dispatches,
+            .upload_bytes = packet.stats.upload_bytes,
+        };
+        defer timing.total_ns = elapsedSince(total_start);
+
+        if (!packet.stats.supported) {
+            timing.fallback = .unsupported_packet;
+            return false;
+        }
+        if (surface_width == 0 or surface_height == 0) {
+            timing.fallback = .empty_surface;
+            return false;
+        }
+        if (packet.calls.items.len == 0 or packet.tasks.items.len == 0) {
+            timing.fallback = .empty_packet;
+            return false;
+        }
+
+        const resource_start = nowNs();
         self.ensurePathTextureResources(textures);
-        if (!self.sparseTexturesAvailable(packet)) return false;
+        if (!self.sparseTexturesAvailable(packet)) {
+            timing.resource_ns = elapsedSince(resource_start);
+            timing.fallback = .missing_texture;
+            return false;
+        }
 
         self.ensureSparseFineResources(surface_width, surface_height, packet, segments);
-        if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) return false;
-        if (self.sparse_surface_storage_view.id == 0 or self.sparse_surface_texture_view.id == 0) return false;
-        if (self.path_texture_sampler.id == 0 or self.path_default_view.id == 0) return false;
+        timing.resource_ns = elapsedSince(resource_start);
+        if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) {
+            timing.fallback = .missing_resources;
+            return false;
+        }
+        if (self.sparse_surface_storage_view.id == 0 or self.sparse_surface_texture_view.id == 0) {
+            timing.fallback = .missing_resources;
+            return false;
+        }
+        if (self.path_texture_sampler.id == 0 or self.path_default_view.id == 0) {
+            timing.fallback = .missing_resources;
+            return false;
+        }
 
+        const upload_start = nowNs();
         uploadStorageBuffer(gpu_fine.GpuCall, self.sparse_call_buffer.buffer, packet.calls.items);
         uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
-        uploadStorageBuffer(gpu_fine.GpuStripIndex, self.sparse_strip_index_buffer.buffer, packet.strip_indices.items);
         uploadStorageBuffer(sparse_encode.Segment, self.sparse_segment_buffer.buffer, segments);
+        timing.upload_ns = elapsedSince(upload_start);
 
+        const compute_start = nowNs();
         sg.beginPass(.{ .compute = true, .label = "okys_sparse_fine_compute" });
         sg.applyPipeline(self.sparse_clear_pipeline);
         sg.applyBindings(sparseClearBindings(self.sparse_surface_storage_view));
@@ -372,7 +455,6 @@ pub const Device = struct {
             sg.applyBindings(sparseFineBindings(
                 self.sparse_call_buffer.view,
                 self.sparse_segment_buffer.view,
-                self.sparse_strip_index_buffer.view,
                 self.sparse_task_buffer.view,
                 self.sparse_surface_storage_view,
                 texture.view,
@@ -388,7 +470,9 @@ pub const Device = struct {
             sg.dispatch(@intCast(call.task_count), 1, 1);
         }
         sg.endPass();
+        timing.compute_encode_ns = elapsedSince(compute_start);
 
+        const blit_start = nowNs();
         self.ensureBlitResources(surface_width, surface_height);
         const vertices = blitQuad(dest);
         sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
@@ -400,6 +484,8 @@ pub const Device = struct {
         sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
         sg.draw(0, 4, 1);
         sg.endPass();
+        timing.blit_encode_ns = elapsedSince(blit_start);
+        timing.ok = true;
         return true;
     }
 
@@ -819,7 +905,6 @@ pub const Device = struct {
 
         self.ensureStorageBuffer(&self.sparse_call_buffer, bytesFor(gpu_fine.GpuCall, packet.calls.items.len), "okys_sparse_calls");
         self.ensureStorageBuffer(&self.sparse_segment_buffer, bytesFor(sparse_encode.Segment, segments.len), "okys_sparse_segments");
-        self.ensureStorageBuffer(&self.sparse_strip_index_buffer, bytesFor(gpu_fine.GpuStripIndex, packet.strip_indices.items.len), "okys_sparse_strip_indices");
         self.ensureStorageBuffer(&self.sparse_task_buffer, bytesFor(gpu_fine.GpuFineTask, packet.tasks.items.len), "okys_sparse_fine_tasks");
         self.ensureSparseSurface(surface_width, surface_height);
     }
@@ -854,7 +939,6 @@ pub const Device = struct {
     fn destroySparseFineResources(self: *Device) void {
         self.destroySparseSurface();
         destroyStorageBuffer(&self.sparse_task_buffer);
-        destroyStorageBuffer(&self.sparse_strip_index_buffer);
         destroyStorageBuffer(&self.sparse_segment_buffer);
         destroyStorageBuffer(&self.sparse_call_buffer);
         if (self.sparse_fine_pipeline.id != 0) {
@@ -1042,7 +1126,6 @@ pub fn sparseClearBindings(surface_view: View) Bindings {
 pub fn sparseFineBindings(
     calls_view: View,
     segments_view: View,
-    strip_indices_view: View,
     tasks_view: View,
     surface_view: View,
     image_view: View,
@@ -1051,7 +1134,6 @@ pub fn sparseFineBindings(
     var bindings: Bindings = .{};
     bindings.views[sparse_calls_view_slot] = calls_view;
     bindings.views[sparse_segments_view_slot] = segments_view;
-    bindings.views[sparse_strip_indices_view_slot] = strip_indices_view;
     bindings.views[sparse_tasks_view_slot] = tasks_view;
     bindings.views[sparse_fine_surface_view_slot] = surface_view;
     bindings.views[sparse_image_view_slot] = image_view;
@@ -1080,6 +1162,16 @@ fn dispatchGroups(count: u32, group_size: u32) i32 {
 
 fn bytesFor(comptime T: type, count: usize) usize {
     return @sizeOf(T) * count;
+}
+
+fn nowNs() u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) unreachable;
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+fn elapsedSince(start: u64) u64 {
+    return nowNs() - start;
 }
 
 pub fn pathTextureImageDesc(width: u32, height: u32) sg.ImageDesc {
@@ -1316,7 +1408,6 @@ fn blitQuad(dest: BlitRect) [4]BlitVertex {
 comptime {
     std.debug.assert(@sizeOf(gpu_fine.GpuCall) == @sizeOf(sparse_fine_shader.Gpucall));
     std.debug.assert(@sizeOf(gpu_fine.GpuFineTask) == @sizeOf(sparse_fine_shader.Gpufinetask));
-    std.debug.assert(@sizeOf(gpu_fine.GpuStripIndex) == @sizeOf(sparse_fine_shader.Gpustripindex));
     std.debug.assert(@sizeOf(sparse_encode.Segment) == @sizeOf(sparse_fine_shader.Segment));
 }
 

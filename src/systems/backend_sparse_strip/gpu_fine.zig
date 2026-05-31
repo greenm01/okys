@@ -146,8 +146,8 @@ pub fn build(
                 .y = s.y,
                 .call_index = call_index,
                 .kind = task_alpha_fill,
-                .segment_start = s.segment_indices.start,
-                .segment_count = s.segment_indices.count,
+                .segment_start = call.segments.start,
+                .segment_count = call.segments.count,
                 .strip_index = @intCast(strip_index),
             });
             packet.stats.alpha_fill_tasks += 1;
@@ -178,9 +178,7 @@ pub fn build(
     packet.stats.upload_bytes =
         @sizeOf(GpuCall) * packet.calls.items.len +
         @sizeOf(GpuFineTask) * packet.tasks.items.len +
-        @sizeOf(GpuStripIndex) * packet.strip_indices.items.len +
-        @sizeOf(encode.Segment) * segments.len +
-        @sizeOf(strip.Strip) * strips.len;
+        @sizeOf(encode.Segment) * segments.len;
     return true;
 }
 

@@ -44,10 +44,6 @@ struct GpuFineTask {
     uint _pad0;
 };
 
-struct GpuStripIndex {
-    uint value;
-};
-
 float integrate_clamped_linear(float slope, float intercept, float y0, float y1) {
     if (slope == 0.0) {
         return (y1 - y0) * clamp(intercept, 0.0, 1.0);
@@ -194,10 +190,6 @@ layout(binding=1) readonly buffer segments_buf {
     Segment segments[];
 };
 
-layout(binding=2) readonly buffer strip_indices_buf {
-    GpuStripIndex strip_indices[];
-};
-
 layout(binding=3) readonly buffer tasks_buf {
     GpuFineTask tasks[];
 };
@@ -231,8 +223,7 @@ void main() {
     if (task.kind == 1u) {
         float area = 0.0;
         for (uint i = 0u; i < task.segment_count; i += 1u) {
-            uint segment_index = strip_indices[task.segment_start + i].value;
-            area += segment_area(float(x), float(y), segments[segment_index]);
+            area += segment_area(float(x), float(y), segments[task.segment_start + i]);
         }
         alpha = area_to_alpha(call.fill_rule, area);
     }

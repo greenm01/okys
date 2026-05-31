@@ -233,7 +233,10 @@ pub const Backend = struct {
             self.strips.items,
             packet,
         ) catch return false;
-        if (profile) |p| p.frame_packet = self.framePacketStats();
+        if (profile) |p| {
+            p.frame_packet = self.framePacketStats();
+            p.frame_packet.gpu_fine_upload_bytes = packet.stats.upload_bytes;
+        }
         return supported;
     }
 

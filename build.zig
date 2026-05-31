@@ -113,6 +113,23 @@ pub fn build(b: *std.Build) !void {
     const bench_step = b.step("bench", "Run captured-frame CPU benchmarks");
     bench_step.dependOn(&run_bench.step);
 
+    const gpu_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gpu_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    gpu_bench_mod.addImport("okys", okys_mod);
+    gpu_bench_mod.addImport("sokol", mod_sokol);
+
+    const gpu_bench = b.addExecutable(.{
+        .name = "okys_gpu_bench",
+        .root_module = gpu_bench_mod,
+    });
+    const run_gpu_bench = b.addRunArtifact(gpu_bench);
+    const gpu_bench_step = b.step("gpu-bench", "Run native sparse GPU frame-loop benchmark");
+    gpu_bench_step.dependOn(&run_gpu_bench.step);
+
     // The C ABI static library. Root is c_api.zig so its export fns are roots.
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/c_api.zig"),
