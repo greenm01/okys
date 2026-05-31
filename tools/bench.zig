@@ -1,5 +1,6 @@
 const std = @import("std");
 const okys = @import("okys");
+const bench_options = @import("bench_options");
 const bench_scenes = @import("bench_scenes.zig");
 
 const ImageId = okys.types.image.ImageId;
@@ -27,6 +28,7 @@ const warmup_iterations: usize = 5;
 const measured_iterations: usize = 50;
 const scene_width = bench_scenes.scene_width;
 const scene_height = bench_scenes.scene_height;
+const active_specs = if (bench_options.tiger_only) bench_scenes.tiger_specs[0..] else bench_scenes.specs[0..];
 
 const Scene = struct {
     name: []const u8,
@@ -120,24 +122,28 @@ const Result = struct {
 pub fn main() !void {
     const gpa = std.heap.c_allocator;
 
-    var mixed = try bench_scenes.captureScene(gpa, bench_scenes.drawMixedScene);
-    defer mixed.deinit();
-    var rounded_grid = try bench_scenes.captureScene(gpa, bench_scenes.drawRoundedGridScene);
-    defer rounded_grid.deinit();
-    var arcs_icons = try bench_scenes.captureScene(gpa, bench_scenes.drawArcsIconsScene);
-    defer arcs_icons.deinit();
-    var scissors = try bench_scenes.captureScene(gpa, bench_scenes.drawScissorScene);
-    defer scissors.deinit();
+    var scenes: std.ArrayList(Scene) = .empty;
+    defer scenes.deinit(gpa);
+    try scenes.ensureTotalCapacity(gpa, active_specs.len);
+    var frames: std.ArrayList(CapturedFrame) = .empty;
+    try frames.ensureTotalCapacity(gpa, active_specs.len);
+    defer {
+        for (frames.items) |*frame| frame.deinit();
+        frames.deinit(gpa);
+    }
 
-    const scenes = [_]Scene{
-        .{ .name = bench_scenes.specs[0].name, .frame = &mixed, .draw = bench_scenes.specs[0].draw },
-        .{ .name = bench_scenes.specs[1].name, .frame = &rounded_grid, .draw = bench_scenes.specs[1].draw },
-        .{ .name = bench_scenes.specs[2].name, .frame = &arcs_icons, .draw = bench_scenes.specs[2].draw },
-        .{ .name = bench_scenes.specs[3].name, .frame = &scissors, .draw = bench_scenes.specs[3].draw },
-    };
+    for (active_specs) |spec| {
+        const frame = try bench_scenes.captureScene(gpa, spec.draw);
+        frames.appendAssumeCapacity(frame);
+        scenes.appendAssumeCapacity(.{
+            .name = spec.name,
+            .frame = &frames.items[frames.items.len - 1],
+            .draw = spec.draw,
+        });
+    }
 
     printHeader();
-    for (scenes) |scene| {
+    for (scenes.items) |scene| {
         const frontend = try benchFrontend(gpa, scene.draw);
         printResult(scene.name, "frontend", "frame_build_capture", frontend);
 

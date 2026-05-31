@@ -78,6 +78,12 @@ pub fn build(b: *std.Build) !void {
     okys_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
     okys_mod.addImport("okys_sparse_fine_shader", mod_okys_sparse_fine_shader);
 
+    const tiger_data_mod = b.createModule(.{
+        .root_source_file = b.path("tools/tiger_data.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const native_demo_mod = b.createModule(.{
         .root_source_file = b.path("demos/native_stencil.zig"),
         .target = target,
@@ -104,6 +110,9 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
     bench_mod.addImport("okys", okys_mod);
+    const bench_options = b.addOptions();
+    bench_options.addOption(bool, "tiger_only", false);
+    bench_mod.addOptions("bench_options", bench_options);
 
     const bench = b.addExecutable(.{
         .name = "okys_bench",
@@ -113,6 +122,25 @@ pub fn build(b: *std.Build) !void {
     const bench_step = b.step("bench", "Run captured-frame CPU benchmarks");
     bench_step.dependOn(&run_bench.step);
 
+    const tiger_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    tiger_bench_mod.addImport("okys", okys_mod);
+    const tiger_bench_options = b.addOptions();
+    tiger_bench_options.addOption(bool, "tiger_only", true);
+    tiger_bench_mod.addOptions("bench_options", tiger_bench_options);
+
+    const tiger_bench = b.addExecutable(.{
+        .name = "okys_bench_tiger",
+        .root_module = tiger_bench_mod,
+    });
+    const run_tiger_bench = b.addRunArtifact(tiger_bench);
+    const tiger_bench_step = b.step("bench-tiger", "Run Ghostscript Tiger CPU benchmarks");
+    tiger_bench_step.dependOn(&run_tiger_bench.step);
+
     const gpu_bench_mod = b.createModule(.{
         .root_source_file = b.path("tools/gpu_bench.zig"),
         .target = target,
@@ -121,6 +149,9 @@ pub fn build(b: *std.Build) !void {
     });
     gpu_bench_mod.addImport("okys", okys_mod);
     gpu_bench_mod.addImport("sokol", mod_sokol);
+    const gpu_bench_options = b.addOptions();
+    gpu_bench_options.addOption(bool, "tiger_only", false);
+    gpu_bench_mod.addOptions("bench_options", gpu_bench_options);
 
     const gpu_bench = b.addExecutable(.{
         .name = "okys_gpu_bench",
@@ -129,6 +160,26 @@ pub fn build(b: *std.Build) !void {
     const run_gpu_bench = b.addRunArtifact(gpu_bench);
     const gpu_bench_step = b.step("gpu-bench", "Run native sparse GPU frame-loop benchmark");
     gpu_bench_step.dependOn(&run_gpu_bench.step);
+
+    const tiger_gpu_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gpu_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    tiger_gpu_bench_mod.addImport("okys", okys_mod);
+    tiger_gpu_bench_mod.addImport("sokol", mod_sokol);
+    const tiger_gpu_bench_options = b.addOptions();
+    tiger_gpu_bench_options.addOption(bool, "tiger_only", true);
+    tiger_gpu_bench_mod.addOptions("bench_options", tiger_gpu_bench_options);
+
+    const tiger_gpu_bench = b.addExecutable(.{
+        .name = "okys_gpu_bench_tiger",
+        .root_module = tiger_gpu_bench_mod,
+    });
+    const run_tiger_gpu_bench = b.addRunArtifact(tiger_gpu_bench);
+    const tiger_gpu_bench_step = b.step("gpu-bench-tiger", "Run Ghostscript Tiger sparse GPU frame-loop benchmark");
+    tiger_gpu_bench_step.dependOn(&run_tiger_gpu_bench.step);
 
     // The C ABI static library. Root is c_api.zig so its export fns are roots.
     const lib_mod = b.createModule(.{
@@ -156,6 +207,7 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
     unit_mod.addImport("okys", okys_mod);
+    unit_mod.addImport("tiger_data", tiger_data_mod);
     const unit_tests = b.addTest(.{ .root_module = unit_mod });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

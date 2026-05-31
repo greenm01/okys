@@ -1,6 +1,7 @@
 const std = @import("std");
 const sokol = @import("sokol");
 const okys = @import("okys");
+const bench_options = @import("bench_options");
 const bench_scenes = @import("bench_scenes.zig");
 
 const app = sokol.app;
@@ -16,6 +17,7 @@ const measured_frames: usize = 1000;
 const frame_limit = warmup_frames + measured_frames;
 const scene_width_u32: u32 = @intFromFloat(bench_scenes.scene_width);
 const scene_height_u32: u32 = @intFromFloat(bench_scenes.scene_height);
+const active_specs = if (bench_options.tiger_only) bench_scenes.tiger_specs[0..] else bench_scenes.specs[0..];
 
 const Accumulator = struct {
     frame_ns: u128 = 0,
@@ -76,7 +78,7 @@ const SceneState = struct {
 var device: sokol_device.Device = .{};
 var device_initialized = false;
 var failed = false;
-var scene_states: [bench_scenes.specs.len]SceneState = undefined;
+var scene_states: [active_specs.len]SceneState = undefined;
 var initialized_scenes: usize = 0;
 var current_scene: usize = 0;
 var frame_index: usize = 0;
@@ -103,7 +105,7 @@ fn init() callconv(.c) void {
     device_initialized = true;
     device.resize(bench_scenes.scene_width, bench_scenes.scene_height, 1);
 
-    for (bench_scenes.specs, 0..) |spec, index| {
+    for (active_specs, 0..) |spec, index| {
         scene_states[index] = .{ .spec = spec };
         setupScene(&scene_states[index]) catch |err| {
             fail("setup failed for {s}: {s}", .{ spec.name, @errorName(err) });

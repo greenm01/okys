@@ -1,5 +1,6 @@
 const std = @import("std");
 const okys = @import("okys");
+const tiger_data = @import("tiger_data.zig");
 
 const color = okys.types.color;
 pub const CapturedFrame = okys.render.frame_capture.CapturedFrame;
@@ -32,6 +33,10 @@ pub const specs = [_]SceneSpec{
     .{ .name = "rounded_rect_grid", .draw = drawRoundedGridScene },
     .{ .name = "arcs_icons", .draw = drawArcsIconsScene },
     .{ .name = "nested_scissors", .draw = drawScissorScene },
+};
+
+pub const tiger_specs = [_]SceneSpec{
+    .{ .name = "ghostscript_tiger", .draw = drawTigerScene },
 };
 
 pub fn captureScene(gpa: std.mem.Allocator, draw: SceneDraw) !CapturedFrame {
@@ -256,6 +261,130 @@ pub fn drawScissorScene(c: *Context, image_id: ImageId) void {
     }
 }
 
+pub fn drawTigerScene(c: *Context, _: ImageId) void {
+    paint_ops.fillColor(c, color.rgbaf(0.0, 0.0, 0.50, 1.0));
+    path_ops.beginPath(c);
+    path_ops.rect(c, 0, 0, scene_width, scene_height);
+    render_ops.fill(c);
+
+    var command_index: usize = 0;
+    var point_index: usize = 0;
+    while (command_index < tiger_data.commands.len) {
+        const fill_mode = tiger_data.commands[command_index];
+        command_index += 1;
+        const stroke_mode = tiger_data.commands[command_index];
+        command_index += 1;
+        const cap_mode = tiger_data.commands[command_index];
+        command_index += 1;
+        const join_mode = tiger_data.commands[command_index];
+        command_index += 1;
+
+        const miter_limit = tiger_data.points[point_index];
+        const stroke_width = tiger_data.points[point_index + 1];
+        point_index += 2;
+
+        const stroke_color = color.rgbaf(
+            tiger_data.points[point_index + 0],
+            tiger_data.points[point_index + 1],
+            tiger_data.points[point_index + 2],
+            1.0,
+        );
+        const fill_color = color.rgbaf(
+            tiger_data.points[point_index + 3],
+            tiger_data.points[point_index + 4],
+            tiger_data.points[point_index + 5],
+            1.0,
+        );
+        point_index += 6;
+
+        const path_command_count: usize = @intFromFloat(tiger_data.points[point_index]);
+        point_index += 1;
+
+        path_ops.beginPath(c);
+        var i: usize = 0;
+        while (i < path_command_count) : (i += 1) {
+            const path_command = tiger_data.commands[command_index];
+            command_index += 1;
+            switch (path_command) {
+                'M' => {
+                    path_ops.moveTo(c, tigerX(tiger_data.points[point_index]), tigerY(tiger_data.points[point_index + 1]));
+                    point_index += 2;
+                },
+                'L' => {
+                    path_ops.lineTo(c, tigerX(tiger_data.points[point_index]), tigerY(tiger_data.points[point_index + 1]));
+                    point_index += 2;
+                },
+                'C' => {
+                    path_ops.bezierTo(
+                        c,
+                        tigerX(tiger_data.points[point_index + 0]),
+                        tigerY(tiger_data.points[point_index + 1]),
+                        tigerX(tiger_data.points[point_index + 2]),
+                        tigerY(tiger_data.points[point_index + 3]),
+                        tigerX(tiger_data.points[point_index + 4]),
+                        tigerY(tiger_data.points[point_index + 5]),
+                    );
+                    point_index += 6;
+                },
+                'E' => path_ops.closePath(c),
+                else => {},
+            }
+        }
+
+        if (fill_mode == 'F') {
+            paint_ops.fillColor(c, fill_color);
+            render_ops.fill(c);
+        }
+
+        if (stroke_mode == 'S') {
+            paint_ops.strokeColor(c, stroke_color);
+            state_ops.strokeWidth(c, stroke_width * tiger_scale);
+            state_ops.miterLimit(c, miter_limit);
+            state_ops.lineCap(c, tigerLineCap(cap_mode));
+            state_ops.lineJoin(c, tigerLineJoin(join_mode));
+            render_ops.stroke(c);
+        }
+    }
+}
+
 fn f32FromInt(value: usize) f32 {
     return @floatFromInt(value);
+}
+
+const tiger_min_x: f32 = 17.0;
+const tiger_min_y: f32 = 53.0;
+const tiger_max_x: f32 = 562.0;
+const tiger_max_y: f32 = 613.0;
+const tiger_margin: f32 = 32.0;
+const tiger_visible_width = tiger_max_x - tiger_min_x;
+const tiger_visible_height = tiger_max_y - tiger_min_y;
+const tiger_scale = @min(
+    (scene_width - tiger_margin * 2.0) / tiger_visible_width,
+    (scene_height - tiger_margin * 2.0) / tiger_visible_height,
+);
+const tiger_tx = (scene_width - tiger_visible_width * tiger_scale) * 0.5 - tiger_min_x * tiger_scale;
+const tiger_ty = (scene_height - tiger_visible_height * tiger_scale) * 0.5 - tiger_min_y * tiger_scale;
+
+fn tigerX(x: f32) f32 {
+    return tiger_tx + x * tiger_scale;
+}
+
+fn tigerY(y: f32) f32 {
+    return tiger_ty + (tiger_data.height - y) * tiger_scale;
+}
+
+fn tigerLineCap(mode: u8) okys.state.draw_state.LineCap {
+    return switch (mode) {
+        'R' => .round,
+        'S' => .square,
+        else => .butt,
+    };
+}
+
+fn tigerLineJoin(mode: u8) okys.state.draw_state.LineJoin {
+    return switch (mode) {
+        'R' => .round,
+        'B' => .bevel,
+        else => .miter,
+    };
 }

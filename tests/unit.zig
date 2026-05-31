@@ -16,6 +16,7 @@ const image_ops_tests = @import("image_ops.zig");
 const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
 const texture_tests = @import("textures.zig");
+const tiger_data_tests = @import("tiger_data.zig");
 const color = okys.types.color;
 const Context = okys.state.context.Context;
 const paint_ops = okys.ops.paint;
@@ -81,6 +82,7 @@ test "all production modules analyze" {
     _ = mock_backend;
     _ = sokol_device_tests;
     _ = texture_tests;
+    _ = tiger_data_tests;
 }
 
 test "rgba maps 0..255 to 0..1" {
