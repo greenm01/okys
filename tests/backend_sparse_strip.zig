@@ -151,6 +151,91 @@ test "sparse profiled build reports fine-stage work counters" {
     try testing.expectEqual(@as(usize, 0), packet.upload_budget_warnings);
 }
 
+test "sparse GPU fine packet encodes solid Fill and AlphaFill tasks by call" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queueRect(&iface, 4.25, 4.25, 12.25, 12.25);
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expect(packet.stats.supported);
+    try testing.expectEqual(@as(usize, 1), packet.calls.items.len);
+    try testing.expect(packet.stats.fill_tasks > 0);
+    try testing.expect(packet.stats.alpha_fill_tasks > 0);
+    try testing.expectEqual(packet.tasks.items.len, packet.stats.tasks);
+    try testing.expectEqual(packet.tasks.items.len, packet.calls.items[0].task_count);
+    try testing.expectEqual(@as(u32, 0), packet.calls.items[0].task_start);
+    try testing.expectEqual(@as(usize, 1), packet.stats.dispatches);
+    try testing.expectEqual(packet.tasks.items.len, packet.stats.workgroups);
+    try testing.expect(packet.stats.upload_bytes >= @sizeOf(sparse.gpu_fine.GpuCall) + @sizeOf(sparse.gpu_fine.GpuFineTask));
+
+    var saw_fill = false;
+    var saw_alpha_fill = false;
+    for (packet.tasks.items) |task| {
+        try testing.expectEqual(@as(u32, 0), task.call_index);
+        if (task.kind == sparse.gpu_fine.task_fill) saw_fill = true;
+        if (task.kind == sparse.gpu_fine.task_alpha_fill) saw_alpha_fill = true;
+    }
+    try testing.expect(saw_fill);
+    try testing.expect(saw_alpha_fill);
+}
+
+test "sparse GPU fine packet preserves per-call draw-order ranges" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    queuePaintedRect(&iface, color.rgbaf(1, 0, 0, 1), 4, 4, 20, 20);
+    queuePaintedRect(&iface, color.rgbaf(0, 0, 1, 0.5), 8, 8, 24, 24);
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(@as(usize, 2), packet.calls.items.len);
+    try testing.expect(packet.calls.items[0].task_count > 0);
+    try testing.expect(packet.calls.items[1].task_count > 0);
+    try testing.expectEqual(packet.calls.items[0].task_count, packet.calls.items[1].task_start);
+
+    for (packet.tasks.items[0..packet.calls.items[0].task_count]) |task| {
+        try testing.expectEqual(@as(u32, 0), task.call_index);
+    }
+    const second_start: usize = @intCast(packet.calls.items[1].task_start);
+    for (packet.tasks.items[second_start..]) |task| {
+        try testing.expectEqual(@as(u32, 1), task.call_index);
+    }
+}
+
+test "sparse GPU fine packet falls back for unsupported paint and scissor" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 32, 32, 1);
+
+    const gradient = paint_ops.linearGradient(ctx, 0, 0, 16, 0, color.rgbaf(1, 0, 0, 1), color.rgbaf(0, 0, 1, 1));
+    queuePaintRect(&iface, gradient, 0, 0, 16, 16, disabled_scissor);
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+
+    try testing.expect(!backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(.unsupported_paint, packet.stats.fallback_reason);
+
+    backend.clearQueued();
+    const scissor: color.Scissor = .{
+        .xform = .{ 1, 0, 0, 1, 8, 8 },
+        .extent = .{ 4, 4 },
+    };
+    queuePaintRect(&iface, color.solid(color.rgbaf(0, 1, 0, 1)), 0, 0, 16, 16, scissor);
+    try testing.expect(!backend.buildGpuFinePacket(&packet, null));
+    try testing.expectEqual(.unsupported_scissor, packet.stats.fallback_reason);
+}
+
 test "sparse frame packet bounds diagnostics track clipped out calls" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();

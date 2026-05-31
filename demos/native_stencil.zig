@@ -32,6 +32,7 @@ var stencil_checker_image: ImageId = .none;
 var sparse_ctx: ?*Context = null;
 var sparse_backend: ?*SparseBackend = null;
 var sparse_checker_image: ImageId = .none;
+var sparse_gpu_packet: okys.systems.backend_sparse_strip.GpuFinePacket = .{};
 
 pub fn main() void {
     app.run(.{
@@ -103,8 +104,26 @@ fn frame() callconv(.c) void {
 
     frame_ops.beginFrame(bottom_c, scene_width, scene_height, dpr);
     drawScene(bottom_c, sparse_checker_image);
-    if (bottom_b.build()) {
-        const blit_pass = sokol_device.swapchainPassWithAction(sokol_device.loadPassAction(), glue.swapchain());
+    const blit_pass = sokol_device.swapchainPassWithAction(sokol_device.loadPassAction(), glue.swapchain());
+    var drew_sparse = false;
+    if (bottom_b.buildGpuFinePacket(&sparse_gpu_packet, null)) {
+        drew_sparse = device.drawSparseFineSurface(
+            blit_pass,
+            &sparse_gpu_packet,
+            bottom_b.segments.items,
+            @intFromFloat(scene_width),
+            @intFromFloat(scene_height),
+            .{
+                .x = 0,
+                .y = scene_height,
+                .width = scene_width,
+                .height = scene_height,
+            },
+            width,
+            height,
+        );
+    }
+    if (!drew_sparse and bottom_b.build()) {
         device.drawRgbaSurface(
             blit_pass,
             bottom_b.surface.items,
@@ -139,6 +158,7 @@ fn cleanup() callconv(.c) void {
         sparse_backend = null;
         sparse_checker_image = .none;
     }
+    sparse_gpu_packet.deinit(std.heap.c_allocator);
     device.deinit();
 }
 

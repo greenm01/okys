@@ -19,6 +19,7 @@ pub const bin = @import("bin.zig");
 pub const coarse = @import("coarse.zig");
 pub const debug = @import("debug.zig");
 pub const fine = @import("fine.zig");
+pub const gpu_fine = @import("gpu_fine.zig");
 pub const strip = @import("strip.zig");
 
 pub const EncodedCall = encode.EncodedCall;
@@ -26,6 +27,7 @@ pub const Segment = encode.Segment;
 pub const Strip = strip.Strip;
 pub const TileRef = strip.TileRef;
 pub const FillRule = strip.FillRule;
+pub const GpuFinePacket = gpu_fine.Packet;
 
 pub const dense_strip_segment_warning_threshold: usize = 32;
 pub const gpu_fine_upload_warning_bytes: usize = 4 * 1024 * 1024;
@@ -203,6 +205,32 @@ pub const Backend = struct {
         if (profile) |p| p.fine_ns += elapsedSince(fine_start);
         if (profile) |p| p.frame_packet = self.framePacketStats();
         return true;
+    }
+
+    pub fn buildGpuFinePacket(self: *Backend, packet: *GpuFinePacket, profile: ?*Profile) bool {
+        if (profile) |p| p.reset();
+
+        const bin_start = profileStart(profile);
+        bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles) catch return false;
+        if (profile) |p| p.bin_ns += elapsedSince(bin_start);
+
+        const coarse_start = profileStart(profile);
+        coarse.build(self.gpa, self.tiles.items, &self.strips, &self.strip_segment_indices) catch return false;
+        if (profile) |p| p.coarse_ns += elapsedSince(coarse_start);
+
+        const supported = gpu_fine.build(
+            self.gpa,
+            self.fill_rule,
+            self.viewport_width,
+            self.viewport_height,
+            self.calls.items,
+            self.segments.items,
+            self.strip_segment_indices.items,
+            self.strips.items,
+            packet,
+        ) catch return false;
+        if (profile) |p| p.frame_packet = self.framePacketStats();
+        return supported;
     }
 
     pub fn clearQueued(self: *Backend) void {

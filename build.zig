@@ -52,6 +52,19 @@ pub fn build(b: *std.Build) !void {
         },
         .reflection = true,
     });
+    const mod_okys_sparse_fine_shader = try sokol.shdc.createModule(b, "okys_sparse_fine_shader", mod_sokol, .{
+        .shdc_dep = dep_sokol.builder.dependency("shdc", .{}),
+        .input = "src/shaders/sparse_fine.glsl",
+        .output = "okys_sparse_fine_shader.zig",
+        .slang = .{
+            .glsl430 = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+            .spirv_vk = true,
+        },
+        .reflection = true,
+    });
 
     const okys_mod = b.createModule(.{
         .root_source_file = b.path("src/okys.zig"),
@@ -63,6 +76,7 @@ pub fn build(b: *std.Build) !void {
     okys_mod.addImport("okys_shader", mod_okys_shader);
     okys_mod.addImport("okys_path_shader", mod_okys_path_shader);
     okys_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
+    okys_mod.addImport("okys_sparse_fine_shader", mod_okys_sparse_fine_shader);
 
     const native_demo_mod = b.createModule(.{
         .root_source_file = b.path("demos/native_stencil.zig"),

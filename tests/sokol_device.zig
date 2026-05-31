@@ -114,6 +114,39 @@ test "path texture descriptors and bindings use generated slots" {
     try testing.expectEqual(index_buffer, bindings.index_buffer);
 }
 
+test "sparse compute descriptors use storage resources and generated slots" {
+    const shader = sokol_device.Shader{ .id = 7 };
+    const pipeline = sokol_device.sparseComputePipelineDesc(shader, "test_sparse_compute");
+    try testing.expect(pipeline.compute);
+    try testing.expectEqual(shader, pipeline.shader);
+
+    const image_desc = sokol_device.sparseSurfaceImageDesc(32, 16);
+    try testing.expect(image_desc.usage.storage_image);
+    try testing.expectEqual(@as(i32, 32), image_desc.width);
+    try testing.expectEqual(@as(i32, 16), image_desc.height);
+    try testing.expectEqual(@as(@TypeOf(image_desc.pixel_format), .RGBA8), image_desc.pixel_format);
+
+    const buffer_desc = sokol_device.storageBufferDesc(256, "test_sparse_buffer");
+    try testing.expect(buffer_desc.usage.storage_buffer);
+    try testing.expect(buffer_desc.usage.stream_update);
+    try testing.expectEqual(@as(usize, 256), buffer_desc.size);
+
+    const calls = sokol_device.View{ .id = 1 };
+    const segments = sokol_device.View{ .id = 2 };
+    const indices = sokol_device.View{ .id = 3 };
+    const tasks = sokol_device.View{ .id = 4 };
+    const surface = sokol_device.View{ .id = 5 };
+    const clear_bindings = sokol_device.sparseClearBindings(surface);
+    try testing.expectEqual(surface, clear_bindings.views[sokol_device.sparse_clear_surface_view_slot]);
+
+    const fine_bindings = sokol_device.sparseFineBindings(calls, segments, indices, tasks, surface);
+    try testing.expectEqual(calls, fine_bindings.views[sokol_device.sparse_calls_view_slot]);
+    try testing.expectEqual(segments, fine_bindings.views[sokol_device.sparse_segments_view_slot]);
+    try testing.expectEqual(indices, fine_bindings.views[sokol_device.sparse_strip_indices_view_slot]);
+    try testing.expectEqual(tasks, fine_bindings.views[sokol_device.sparse_tasks_view_slot]);
+    try testing.expectEqual(surface, fine_bindings.views[sokol_device.sparse_fine_surface_view_slot]);
+}
+
 test "path pipeline descriptor uses path vertex layout" {
     const shader = sokol_device.Shader{ .id = 7 };
     const desc = sokol_device.pathPipelineDesc(shader, .cover);

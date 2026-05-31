@@ -3,10 +3,14 @@
 
 const sokol = @import("sokol");
 const sg = sokol.gfx;
+const std = @import("std");
 const blit_shader = @import("okys_blit_shader");
+const gpu_fine = @import("../systems/backend_sparse_strip/gpu_fine.zig");
+const sparse_encode = @import("../systems/backend_sparse_strip/encode.zig");
 const image = @import("../types/image.zig");
 const path = @import("../types/path.zig");
 const path_shader = @import("okys_path_shader");
+const sparse_fine_shader = @import("okys_sparse_fine_shader");
 const smoke_shader = @import("okys_shader");
 
 pub const Desc = sg.Desc;
@@ -30,6 +34,16 @@ pub const blit_vs_params_slot = blit_shader.UB_vs_params;
 pub const blit_view_slot = blit_shader.VIEW_sparse_tex;
 pub const blit_sampler_slot = blit_shader.SMP_sparse_smp;
 pub const BlitVsParams = blit_shader.VsParams;
+pub const SparseClearParams = sparse_fine_shader.ClearParams;
+pub const SparseFineParams = sparse_fine_shader.FineParams;
+pub const sparse_clear_surface_view_slot = sparse_fine_shader.VIEW_clear_surface_img;
+pub const sparse_calls_view_slot = sparse_fine_shader.VIEW_calls_buf;
+pub const sparse_segments_view_slot = sparse_fine_shader.VIEW_segments_buf;
+pub const sparse_strip_indices_view_slot = sparse_fine_shader.VIEW_strip_indices_buf;
+pub const sparse_tasks_view_slot = sparse_fine_shader.VIEW_tasks_buf;
+pub const sparse_fine_surface_view_slot = sparse_fine_shader.VIEW_fine_surface_img;
+pub const sparse_clear_params_slot = sparse_fine_shader.UB_clear_params;
+pub const sparse_fine_params_slot = sparse_fine_shader.UB_fine_params;
 
 pub const smoke_position_attr = smoke_shader.ATTR_smoke_position;
 pub const smoke_color_attr = smoke_shader.ATTR_smoke_color0;
@@ -116,6 +130,12 @@ const PathTextureResource = struct {
     view: View = .{},
 };
 
+const StorageBufferResource = struct {
+    buffer: Buffer = .{},
+    view: View = .{},
+    capacity: usize = 0,
+};
+
 pub const BlitRect = struct {
     x: f32,
     y: f32,
@@ -164,6 +184,19 @@ pub const Device = struct {
     path_index_buffer: Buffer = .{},
     path_vertex_capacity: usize = 0,
     path_index_capacity: usize = 0,
+    sparse_clear_shader: Shader = .{},
+    sparse_fine_shader: Shader = .{},
+    sparse_clear_pipeline: Pipeline = .{},
+    sparse_fine_pipeline: Pipeline = .{},
+    sparse_surface_image: Image = .{},
+    sparse_surface_storage_view: View = .{},
+    sparse_surface_texture_view: View = .{},
+    sparse_surface_width: u32 = 0,
+    sparse_surface_height: u32 = 0,
+    sparse_call_buffer: StorageBufferResource = .{},
+    sparse_segment_buffer: StorageBufferResource = .{},
+    sparse_strip_index_buffer: StorageBufferResource = .{},
+    sparse_task_buffer: StorageBufferResource = .{},
 
     pub fn initOwned(desc: Desc) Device {
         sg.setup(desc);
@@ -177,6 +210,7 @@ pub const Device = struct {
     pub fn deinit(self: *Device) void {
         self.destroyBlitResources();
         self.destroySmokeResources();
+        self.destroySparseFineResources();
         self.destroyPathTextureResources();
         self.destroyPathResources();
         if (self.owns_setup) {
@@ -287,6 +321,76 @@ pub const Device = struct {
         sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
         sg.draw(0, 4, 1);
         sg.endPass();
+    }
+
+    pub fn drawSparseFineSurface(
+        self: *Device,
+        pass: Pass,
+        packet: *const gpu_fine.Packet,
+        segments: []const sparse_encode.Segment,
+        surface_width: u32,
+        surface_height: u32,
+        dest: BlitRect,
+        view_width: f32,
+        view_height: f32,
+    ) bool {
+        if (!packet.stats.supported) return false;
+        if (surface_width == 0 or surface_height == 0) return false;
+        if (packet.calls.items.len == 0) return false;
+        if (packet.tasks.items.len == 0) return false;
+
+        self.ensureSparseFineResources(surface_width, surface_height, packet, segments);
+        if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) return false;
+        if (self.sparse_surface_storage_view.id == 0 or self.sparse_surface_texture_view.id == 0) return false;
+
+        uploadStorageBuffer(gpu_fine.GpuCall, self.sparse_call_buffer.buffer, packet.calls.items);
+        uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
+        uploadStorageBuffer(gpu_fine.GpuStripIndex, self.sparse_strip_index_buffer.buffer, packet.strip_indices.items);
+        uploadStorageBuffer(sparse_encode.Segment, self.sparse_segment_buffer.buffer, segments);
+
+        sg.beginPass(.{ .compute = true, .label = "okys_sparse_fine_compute" });
+        sg.applyPipeline(self.sparse_clear_pipeline);
+        sg.applyBindings(sparseClearBindings(self.sparse_surface_storage_view));
+        const clear_params: SparseClearParams = .{
+            .surface_width = @intCast(surface_width),
+            .surface_height = @intCast(surface_height),
+        };
+        sg.applyUniforms(sparse_clear_params_slot, rangeFromValue(SparseClearParams, &clear_params));
+        sg.dispatch(dispatchGroups(surface_width, 8), dispatchGroups(surface_height, 8), 1);
+
+        sg.applyPipeline(self.sparse_fine_pipeline);
+        sg.applyBindings(sparseFineBindings(
+            self.sparse_call_buffer.view,
+            self.sparse_segment_buffer.view,
+            self.sparse_strip_index_buffer.view,
+            self.sparse_task_buffer.view,
+            self.sparse_surface_storage_view,
+        ));
+        for (packet.calls.items) |call| {
+            if (call.task_count == 0) continue;
+            const fine_params: SparseFineParams = .{
+                .surface_width = @intCast(surface_width),
+                .surface_height = @intCast(surface_height),
+                .task_start = @intCast(call.task_start),
+                .task_count = @intCast(call.task_count),
+            };
+            sg.applyUniforms(sparse_fine_params_slot, rangeFromValue(SparseFineParams, &fine_params));
+            sg.dispatch(@intCast(call.task_count), 1, 1);
+        }
+        sg.endPass();
+
+        self.ensureBlitResources(surface_width, surface_height);
+        const vertices = blitQuad(dest);
+        sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+
+        self.beginPass(pass);
+        const params = blitVsParams(view_width, view_height);
+        sg.applyPipeline(self.blit_pipeline);
+        sg.applyBindings(blitBindings(self.blit_vertices, self.sparse_surface_texture_view, self.blit_sampler));
+        sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
+        sg.draw(0, 4, 1);
+        sg.endPass();
+        return true;
     }
 
     pub fn createPathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
@@ -662,6 +766,101 @@ pub const Device = struct {
         self.createPathResources(vertex_capacity, index_count);
     }
 
+    fn ensureSparseFineResources(
+        self: *Device,
+        surface_width: u32,
+        surface_height: u32,
+        packet: *const gpu_fine.Packet,
+        segments: []const sparse_encode.Segment,
+    ) void {
+        if (self.sparse_clear_shader.id == 0) {
+            self.sparse_clear_shader = sg.makeShader(sparse_fine_shader.sparseClearShaderDesc(sg.queryBackend()));
+        }
+        if (self.sparse_fine_shader.id == 0) {
+            self.sparse_fine_shader = sg.makeShader(sparse_fine_shader.sparseFineShaderDesc(sg.queryBackend()));
+        }
+        if (self.sparse_clear_pipeline.id == 0 and self.sparse_clear_shader.id != 0) {
+            self.sparse_clear_pipeline = sg.makePipeline(sparseComputePipelineDesc(self.sparse_clear_shader, "okys_sparse_clear_pipeline"));
+        }
+        if (self.sparse_fine_pipeline.id == 0 and self.sparse_fine_shader.id != 0) {
+            self.sparse_fine_pipeline = sg.makePipeline(sparseComputePipelineDesc(self.sparse_fine_shader, "okys_sparse_fine_pipeline"));
+        }
+
+        self.ensureStorageBuffer(&self.sparse_call_buffer, bytesFor(gpu_fine.GpuCall, packet.calls.items.len), "okys_sparse_calls");
+        self.ensureStorageBuffer(&self.sparse_segment_buffer, bytesFor(sparse_encode.Segment, segments.len), "okys_sparse_segments");
+        self.ensureStorageBuffer(&self.sparse_strip_index_buffer, bytesFor(gpu_fine.GpuStripIndex, packet.strip_indices.items.len), "okys_sparse_strip_indices");
+        self.ensureStorageBuffer(&self.sparse_task_buffer, bytesFor(gpu_fine.GpuFineTask, packet.tasks.items.len), "okys_sparse_fine_tasks");
+        self.ensureSparseSurface(surface_width, surface_height);
+    }
+
+    fn ensureStorageBuffer(self: *Device, resource: *StorageBufferResource, byte_count: usize, label: [*c]const u8) void {
+        _ = self;
+        const capacity = @max(byte_count, 4);
+        if (resource.buffer.id != 0 and resource.view.id != 0 and resource.capacity >= capacity) {
+            return;
+        }
+        destroyStorageBuffer(resource);
+        resource.buffer = sg.makeBuffer(storageBufferDesc(capacity, label));
+        resource.view = sg.makeView(storageBufferViewDesc(resource.buffer, label));
+        resource.capacity = capacity;
+    }
+
+    fn ensureSparseSurface(self: *Device, surface_width: u32, surface_height: u32) void {
+        const missing = self.sparse_surface_image.id == 0 or
+            self.sparse_surface_storage_view.id == 0 or
+            self.sparse_surface_texture_view.id == 0;
+        if (!missing and self.sparse_surface_width == surface_width and self.sparse_surface_height == surface_height) {
+            return;
+        }
+        self.destroySparseSurface();
+        self.sparse_surface_image = sg.makeImage(sparseSurfaceImageDesc(surface_width, surface_height));
+        self.sparse_surface_storage_view = sg.makeView(sparseSurfaceStorageViewDesc(self.sparse_surface_image));
+        self.sparse_surface_texture_view = sg.makeView(sparseSurfaceTextureViewDesc(self.sparse_surface_image));
+        self.sparse_surface_width = surface_width;
+        self.sparse_surface_height = surface_height;
+    }
+
+    fn destroySparseFineResources(self: *Device) void {
+        self.destroySparseSurface();
+        destroyStorageBuffer(&self.sparse_task_buffer);
+        destroyStorageBuffer(&self.sparse_strip_index_buffer);
+        destroyStorageBuffer(&self.sparse_segment_buffer);
+        destroyStorageBuffer(&self.sparse_call_buffer);
+        if (self.sparse_fine_pipeline.id != 0) {
+            sg.destroyPipeline(self.sparse_fine_pipeline);
+            self.sparse_fine_pipeline = .{};
+        }
+        if (self.sparse_clear_pipeline.id != 0) {
+            sg.destroyPipeline(self.sparse_clear_pipeline);
+            self.sparse_clear_pipeline = .{};
+        }
+        if (self.sparse_fine_shader.id != 0) {
+            sg.destroyShader(self.sparse_fine_shader);
+            self.sparse_fine_shader = .{};
+        }
+        if (self.sparse_clear_shader.id != 0) {
+            sg.destroyShader(self.sparse_clear_shader);
+            self.sparse_clear_shader = .{};
+        }
+    }
+
+    fn destroySparseSurface(self: *Device) void {
+        if (self.sparse_surface_texture_view.id != 0) {
+            sg.destroyView(self.sparse_surface_texture_view);
+            self.sparse_surface_texture_view = .{};
+        }
+        if (self.sparse_surface_storage_view.id != 0) {
+            sg.destroyView(self.sparse_surface_storage_view);
+            self.sparse_surface_storage_view = .{};
+        }
+        if (self.sparse_surface_image.id != 0) {
+            sg.destroyImage(self.sparse_surface_image);
+            self.sparse_surface_image = .{};
+        }
+        self.sparse_surface_width = 0;
+        self.sparse_surface_height = 0;
+    }
+
     fn pathPipeline(self: *const Device, kind: PathDrawKind) Pipeline {
         return switch (kind) {
             .stencil_nonzero => self.path_stencil_nonzero_pipeline,
@@ -753,6 +952,99 @@ pub fn blitTextureViewDesc(image_handle: Image) sg.ViewDesc {
         .texture = .{ .image = image_handle },
         .label = "okys_sparse_surface_view",
     };
+}
+
+pub fn sparseComputePipelineDesc(shader: Shader, label: [*c]const u8) PipelineDesc {
+    return .{
+        .compute = true,
+        .shader = shader,
+        .label = label,
+    };
+}
+
+pub fn sparseSurfaceImageDesc(width: u32, height: u32) sg.ImageDesc {
+    return .{
+        .type = ._2D,
+        .usage = .{ .storage_image = true },
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .pixel_format = .RGBA8,
+        .label = "okys_sparse_compute_surface",
+    };
+}
+
+pub fn sparseSurfaceStorageViewDesc(image_handle: Image) sg.ViewDesc {
+    return .{
+        .storage_image = .{ .image = image_handle },
+        .label = "okys_sparse_compute_surface_storage_view",
+    };
+}
+
+pub fn sparseSurfaceTextureViewDesc(image_handle: Image) sg.ViewDesc {
+    return .{
+        .texture = .{ .image = image_handle },
+        .label = "okys_sparse_compute_surface_texture_view",
+    };
+}
+
+pub fn storageBufferDesc(size: usize, label: [*c]const u8) BufferDesc {
+    return .{
+        .size = size,
+        .usage = .{ .storage_buffer = true, .stream_update = true },
+        .label = label,
+    };
+}
+
+pub fn storageBufferViewDesc(buffer: Buffer, label: [*c]const u8) sg.ViewDesc {
+    return .{
+        .storage_buffer = .{ .buffer = buffer },
+        .label = label,
+    };
+}
+
+pub fn sparseClearBindings(surface_view: View) Bindings {
+    var bindings: Bindings = .{};
+    bindings.views[sparse_clear_surface_view_slot] = surface_view;
+    return bindings;
+}
+
+pub fn sparseFineBindings(
+    calls_view: View,
+    segments_view: View,
+    strip_indices_view: View,
+    tasks_view: View,
+    surface_view: View,
+) Bindings {
+    var bindings: Bindings = .{};
+    bindings.views[sparse_calls_view_slot] = calls_view;
+    bindings.views[sparse_segments_view_slot] = segments_view;
+    bindings.views[sparse_strip_indices_view_slot] = strip_indices_view;
+    bindings.views[sparse_tasks_view_slot] = tasks_view;
+    bindings.views[sparse_fine_surface_view_slot] = surface_view;
+    return bindings;
+}
+
+fn destroyStorageBuffer(resource: *StorageBufferResource) void {
+    if (resource.view.id != 0) {
+        sg.destroyView(resource.view);
+    }
+    if (resource.buffer.id != 0) {
+        sg.destroyBuffer(resource.buffer);
+    }
+    resource.* = .{};
+}
+
+fn uploadStorageBuffer(comptime T: type, buffer: Buffer, items: []const T) void {
+    if (buffer.id == 0 or items.len == 0) return;
+    sg.updateBuffer(buffer, rangeFromSlice(T, items));
+}
+
+fn dispatchGroups(count: u32, group_size: u32) i32 {
+    return @intCast((count + group_size - 1) / group_size);
+}
+
+fn bytesFor(comptime T: type, count: usize) usize {
+    return @sizeOf(T) * count;
 }
 
 pub fn pathTextureImageDesc(width: u32, height: u32) sg.ImageDesc {
@@ -984,6 +1276,13 @@ fn blitQuad(dest: BlitRect) [4]BlitVertex {
         .{ .x = x0, .y = y1, .u = 0.0, .v = 1.0 },
         .{ .x = x1, .y = y1, .u = 1.0, .v = 1.0 },
     };
+}
+
+comptime {
+    std.debug.assert(@sizeOf(gpu_fine.GpuCall) == @sizeOf(sparse_fine_shader.Gpucall));
+    std.debug.assert(@sizeOf(gpu_fine.GpuFineTask) == @sizeOf(sparse_fine_shader.Gpufinetask));
+    std.debug.assert(@sizeOf(gpu_fine.GpuStripIndex) == @sizeOf(sparse_fine_shader.Gpustripindex));
+    std.debug.assert(@sizeOf(sparse_encode.Segment) == @sizeOf(sparse_fine_shader.Segment));
 }
 
 fn findPathTextureInput(textures: []const PathTexture, id: u32) ?*const PathTexture {

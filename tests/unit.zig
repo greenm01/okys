@@ -58,6 +58,7 @@ test "all production modules analyze" {
     _ = okys.systems.backend_sparse_strip.coarse;
     _ = okys.systems.backend_sparse_strip.debug;
     _ = okys.systems.backend_sparse_strip.fine;
+    _ = okys.systems.backend_sparse_strip.gpu_fine;
     _ = okys.systems.backend_sparse_strip.strip;
     _ = okys.render.backend_selection;
     _ = okys.render.frame_capture;
