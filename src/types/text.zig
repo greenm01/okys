@@ -22,6 +22,22 @@ pub const GlyphRunMetrics = struct {
     missing_count: usize = 0,
 };
 
+pub const TextGlyphPosition = extern struct {
+    str: ?[*]const u8 = null,
+    x: f32 = 0,
+    minx: f32 = 0,
+    maxx: f32 = 0,
+};
+
+pub const TextRow = extern struct {
+    start: ?[*]const u8 = null,
+    end: ?[*]const u8 = null,
+    next: ?[*]const u8 = null,
+    width: f32 = 0,
+    minx: f32 = 0,
+    maxx: f32 = 0,
+};
+
 pub const GlyphRecord = struct {
     id: GlyphId = .none,
     atlas_x: u32 = 0,

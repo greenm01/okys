@@ -66,6 +66,22 @@ typedef struct OKYpaint {
     int image;
 } OKYpaint;
 
+typedef struct OKYglyphPosition {
+    const char *str;
+    float x;
+    float minx;
+    float maxx;
+} OKYglyphPosition;
+
+typedef struct OKYtextRow {
+    const char *start;
+    const char *end;
+    const char *next;
+    float width;
+    float minx;
+    float maxx;
+} OKYtextRow;
+
 /* --- version / abi ----------------------------------------------------- */
 unsigned int okyAbiVersion(void);
 const char *okyVersionString(void);
@@ -161,6 +177,19 @@ void okyRoundedRectVarying(OKYcontext *ctx, float x, float y, float w, float h,
                            float radius_bottom_left);
 void okyEllipse(OKYcontext *ctx, float cx, float cy, float rx, float ry);
 void okyCircle(OKYcontext *ctx, float cx, float cy, float r);
+
+/* --- text --------------------------------------------------------------- */
+float okyText(OKYcontext *ctx, float x, float y, const char *string,
+              const char *end);
+void okyTextBox(OKYcontext *ctx, float x, float y, float break_row_width,
+                const char *string, const char *end);
+int okyTextGlyphPositions(OKYcontext *ctx, float x, float y,
+                          const char *string, const char *end,
+                          OKYglyphPosition *positions, int max_positions);
+void okyTextMetrics(OKYcontext *ctx, float *ascender, float *descender,
+                    float *lineh);
+int okyTextBreakLines(OKYcontext *ctx, const char *string, const char *end,
+                      float break_row_width, OKYtextRow *rows, int max_rows);
 
 /* --- render ------------------------------------------------------------ */
 void okyFill(OKYcontext *ctx);

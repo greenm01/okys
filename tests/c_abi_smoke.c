@@ -93,6 +93,30 @@ int main(void) {
     okyStrokeColor(ctx, red);
     okyFill(ctx);
     okyStroke(ctx);
+
+    const char *sample = "one two three";
+    float tx = okyText(ctx, 10.0f, 20.0f, sample, sample + 3);
+    assert(tx > 33.9f && tx < 34.1f);
+    okyTextBox(ctx, 0.0f, 0.0f, 56.0f, sample, NULL);
+
+    float ascender = 0.0f;
+    float descender = 0.0f;
+    float lineh = 0.0f;
+    okyTextMetrics(ctx, &ascender, &descender, &lineh);
+    assert(ascender > 12.7f && descender < -3.1f && lineh > 22.3f);
+
+    OKYglyphPosition positions[8];
+    int position_count =
+        okyTextGlyphPositions(ctx, 5.0f, 6.0f, sample, sample + 3, positions, 8);
+    assert(position_count == 3);
+    assert(positions[0].str == sample && positions[1].str == sample + 1);
+    assert(positions[2].maxx > 28.9f && positions[2].maxx < 29.1f);
+
+    OKYtextRow rows[4];
+    int row_count = okyTextBreakLines(ctx, sample, NULL, 56.0f, rows, 4);
+    assert(row_count == 2);
+    assert(rows[0].start == sample && rows[0].end == sample + 7);
+    assert(rows[0].next == sample + 8);
     okyRestore(ctx);
 
     okyEndFrame(ctx);

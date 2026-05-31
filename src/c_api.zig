@@ -19,6 +19,9 @@ const paths = @import("ops/path_ops.zig");
 const paint = @import("ops/paint_ops.zig");
 const render_ops = @import("ops/render_ops.zig");
 const state_ops = @import("ops/state_ops.zig");
+const text_ops = @import("ops/text_ops.zig");
+const TextGlyphPosition = text_ops.TextGlyphPosition;
+const TextRow = text_ops.TextRow;
 
 const version_string = "0.0.0";
 const abi_version: u32 = 0;
@@ -299,6 +302,43 @@ export fn okyCircle(ctx: ?*Context, cx: f32, cy: f32, r: f32) void {
     if (ctx) |c| paths.circle(c, cx, cy, r);
 }
 
+// --- text ------------------------------------------------------------------
+
+export fn okyText(ctx: ?*Context, x: f32, y: f32, string: ?[*]const u8, end: ?[*]const u8) f32 {
+    if (ctx == null) return x;
+    const bytes = stringSlice(string, end);
+    return text_ops.text(ctx.?, x, y, bytes);
+}
+
+export fn okyTextBox(ctx: ?*Context, x: f32, y: f32, break_row_width: f32, string: ?[*]const u8, end: ?[*]const u8) void {
+    if (ctx == null) return;
+    const bytes = stringSlice(string, end);
+    text_ops.textBox(ctx.?, x, y, break_row_width, bytes);
+}
+
+export fn okyTextGlyphPositions(ctx: ?*Context, x: f32, y: f32, string: ?[*]const u8, end: ?[*]const u8, positions: ?[*]TextGlyphPosition, max_positions: c_int) c_int {
+    _ = y;
+    if (ctx == null or positions == null or max_positions <= 0) return 0;
+    const bytes = stringSlice(string, end);
+    const len: usize = @intCast(max_positions);
+    return text_ops.glyphPositions(x, bytes, positions.?[0..len]);
+}
+
+export fn okyTextMetrics(ctx: ?*Context, ascender: ?*f32, descender: ?*f32, lineh: ?*f32) void {
+    if (ctx == null) return;
+    const metrics = text_ops.textMetrics();
+    if (ascender) |out| out.* = metrics.ascender;
+    if (descender) |out| out.* = metrics.descender;
+    if (lineh) |out| out.* = metrics.line_height;
+}
+
+export fn okyTextBreakLines(ctx: ?*Context, string: ?[*]const u8, end: ?[*]const u8, break_row_width: f32, rows: ?[*]TextRow, max_rows: c_int) c_int {
+    if (ctx == null or rows == null or max_rows <= 0) return 0;
+    const bytes = stringSlice(string, end);
+    const len: usize = @intCast(max_rows);
+    return text_ops.breakLines(bytes, break_row_width, rows.?[0..len]);
+}
+
 // --- render ----------------------------------------------------------------
 
 export fn okyFill(ctx: ?*Context) void {
@@ -338,4 +378,18 @@ fn imageIdFromInt(id: c_int) @import("types/image.zig").ImageId {
 
 fn rgbaLen(w: u32, h: u32) usize {
     return @as(usize, w) * @as(usize, h) * 4;
+}
+
+fn stringSlice(string: ?[*]const u8, end: ?[*]const u8) []const u8 {
+    const ptr = string orelse return &.{};
+    const start_addr = @intFromPtr(ptr);
+    if (end) |end_ptr| {
+        const end_addr = @intFromPtr(end_ptr);
+        if (end_addr <= start_addr) return &.{};
+        return ptr[0 .. end_addr - start_addr];
+    }
+
+    var len: usize = 0;
+    while (ptr[len] != 0) : (len += 1) {}
+    return ptr[0..len];
 }

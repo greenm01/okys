@@ -19,6 +19,7 @@ const sokol_device_tests = @import("sokol_device.zig");
 const texture_tests = @import("textures.zig");
 const tiger_data_tests = @import("tiger_data.zig");
 const stroke_dash_tests = @import("stroke_dash.zig");
+const text_abi_tests = @import("text_abi.zig");
 const color = okys.types.color;
 const Context = okys.state.context.Context;
 const paint_ops = okys.ops.paint;
@@ -91,6 +92,7 @@ test "all production modules analyze" {
     _ = texture_tests;
     _ = tiger_data_tests;
     _ = stroke_dash_tests;
+    _ = text_abi_tests;
 }
 
 test "rgba maps 0..255 to 0..1" {
