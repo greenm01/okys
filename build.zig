@@ -242,6 +242,23 @@ pub fn build(b: *std.Build) !void {
     const tiger_gpu_bench_step = b.step("gpu-bench-tiger", "Run Ghostscript Tiger sparse GPU frame-loop benchmark");
     tiger_gpu_bench_step.dependOn(&run_tiger_gpu_bench.step);
 
+    const gpu_readback_smoke_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gpu_readback_smoke.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    gpu_readback_smoke_mod.addImport("okys", okys_mod);
+    gpu_readback_smoke_mod.addImport("sokol", mod_sokol);
+
+    const gpu_readback_smoke = b.addExecutable(.{
+        .name = "okys_gpu_readback_smoke",
+        .root_module = gpu_readback_smoke_mod,
+    });
+    const run_gpu_readback_smoke = b.addRunArtifact(gpu_readback_smoke);
+    const gpu_readback_smoke_step = b.step("gpu-readback-smoke", "Run GL offscreen okyReadPixels smoke test");
+    gpu_readback_smoke_step.dependOn(&run_gpu_readback_smoke.step);
+
     // The C ABI static library. Root is c_api.zig so its export fns are roots.
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/c_api.zig"),

@@ -27,6 +27,14 @@ pub const PixelFormat = enum(c_int) {
     depth = 4,
 };
 
+pub const ReadPixelsStatus = enum(c_int) {
+    ok = 1,
+    invalid_argument = -1,
+    unsupported_backend = -2,
+    no_graphics_runtime = -3,
+    backend_failure = -4,
+};
+
 pub const GraphicsDesc = extern struct {
     backend: c_int,
     color_format: c_int,
@@ -77,6 +85,16 @@ pub const RenderTarget = extern struct {
     webgpu_render_view: ?*const anyopaque,
     webgpu_resolve_view: ?*const anyopaque,
     webgpu_depth_stencil_view: ?*const anyopaque,
+};
+
+pub const ReadPixelsDesc = extern struct {
+    x: c_int,
+    y: c_int,
+    w: c_int,
+    h: c_int,
+    format: c_int,
+    dst_stride_bytes: c_int,
+    dst: ?[*]u8,
 };
 
 const BackendStorage = union(enum) {
@@ -162,6 +180,35 @@ pub const Runtime = struct {
         if (!validTarget(target, backend)) return false;
         self.target = normalizedTarget(target, self.color_format, self.depth_format, self.sample_count);
         return true;
+    }
+
+    pub fn readPixels(self: *Runtime, desc: ReadPixelsDesc) ReadPixelsStatus {
+        if (!validReadPixelsDesc(desc)) return .invalid_argument;
+        if (self.graphics_backend != .gl) return .unsupported_backend;
+        const target = self.readbackTarget() orelse return .invalid_argument;
+        const x: u32 = @intCast(desc.x);
+        const y: u32 = @intCast(desc.y);
+        const width: u32 = @intCast(desc.w);
+        const height: u32 = @intCast(desc.h);
+        const target_width: u32 = @intCast(target.width_px);
+        const target_height: u32 = @intCast(target.height_px);
+        if (x > target_width or y > target_height) return .invalid_argument;
+        if (width > target_width - x or height > target_height - y) return .invalid_argument;
+
+        const dst = desc.dst orelse return .invalid_argument;
+        const ok = self.device.readPixelsGL(
+            self.gpa,
+            target.gl_framebuffer,
+            target_width,
+            target_height,
+            x,
+            y,
+            width,
+            height,
+            @intCast(desc.dst_stride_bytes),
+            dst,
+        );
+        return if (ok) .ok else .backend_failure;
     }
 
     pub fn submit(self: *Runtime, view_width: f32, view_height: f32, dpr: f32) bool {
@@ -273,7 +320,47 @@ pub const Runtime = struct {
             .webgpu_depth_stencil_view = null,
         };
     }
+
+    fn readbackTarget(self: *const Runtime) ?RenderTarget {
+        if (self.target) |target| return target;
+        if (self.graphics_backend != .gl) return null;
+        if (self.device.width <= 0 or self.device.height <= 0) return null;
+        return .{
+            .backend = @intFromEnum(GraphicsBackend.gl),
+            .width_px = self.device.width,
+            .height_px = self.device.height,
+            .color_format = @intFromEnum(pixelFormatToPublic(self.color_format)),
+            .depth_format = @intFromEnum(pixelFormatToPublic(self.depth_format)),
+            .sample_count = self.sample_count,
+            .gl_framebuffer = 0,
+            .metal_current_drawable = null,
+            .metal_depth_stencil_texture = null,
+            .metal_msaa_color_texture = null,
+            .d3d11_render_view = null,
+            .d3d11_resolve_view = null,
+            .d3d11_depth_stencil_view = null,
+            .vulkan_render_image = null,
+            .vulkan_render_view = null,
+            .vulkan_resolve_image = null,
+            .vulkan_resolve_view = null,
+            .vulkan_depth_stencil_image = null,
+            .vulkan_depth_stencil_view = null,
+            .vulkan_render_finished_semaphore = null,
+            .vulkan_present_complete_semaphore = null,
+            .webgpu_render_view = null,
+            .webgpu_resolve_view = null,
+            .webgpu_depth_stencil_view = null,
+        };
+    }
 };
+
+fn validReadPixelsDesc(desc: ReadPixelsDesc) bool {
+    if (desc.format != @intFromEnum(PixelFormat.rgba8)) return false;
+    if (desc.w <= 0 or desc.h <= 0) return false;
+    if (desc.x < 0 or desc.y < 0) return false;
+    const row_bytes = @as(i64, desc.w) * 4;
+    return desc.dst != null and desc.dst_stride_bytes >= row_bytes;
+}
 
 fn createBackend(gpa: std.mem.Allocator, flags: u32) !BackendStorage {
     return switch (backend_selection.fromCreateFlags(flags)) {

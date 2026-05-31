@@ -48,6 +48,14 @@ enum OKYpixelFormat {
     OKY_PIXEL_FORMAT_DEPTH = 4,
 };
 
+enum OKYreadPixelsStatus {
+    OKY_READ_PIXELS_OK = 1,
+    OKY_READ_PIXELS_INVALID_ARGUMENT = -1,
+    OKY_READ_PIXELS_UNSUPPORTED_BACKEND = -2,
+    OKY_READ_PIXELS_NO_GRAPHICS_RUNTIME = -3,
+    OKY_READ_PIXELS_BACKEND_FAILURE = -4,
+};
+
 enum OKYlineCap {
     OKY_BUTT = 0,
     OKY_ROUND = 1,
@@ -167,6 +175,16 @@ typedef struct OKYrenderTarget {
     const void *webgpu_depth_stencil_view;
 } OKYrenderTarget;
 
+typedef struct OKYreadPixelsDesc {
+    int x;
+    int y;
+    int w;
+    int h;
+    int format;
+    int dst_stride_bytes;
+    unsigned char *dst;
+} OKYreadPixelsDesc;
+
 /* --- version / abi ----------------------------------------------------- */
 unsigned int okyAbiVersion(void);
 const char *okyVersionString(void);
@@ -184,6 +202,7 @@ void okyCancelFrame(OKYcontext *ctx);
 /* --- WebGPU bridge ----------------------------------------------------- */
 int okySetupGraphics(OKYcontext *ctx, const OKYgraphicsDesc *desc);
 int okySetRenderTarget(OKYcontext *ctx, const OKYrenderTarget *target);
+int okyReadPixels(OKYcontext *ctx, const OKYreadPixelsDesc *desc);
 int okySetupGL(OKYcontext *ctx, int sample_count);
 void okySetupWebGPU(OKYcontext *ctx, const void *wgpu_device,
                     int color_format);

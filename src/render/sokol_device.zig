@@ -68,6 +68,56 @@ pub const max_path_textures = 64;
 const path_default_texture_pixels = [_]u8{ 255, 255, 255, 255 };
 const max_compute_dispatch_groups_per_axis: u32 = 65_535;
 
+const GL_NO_ERROR: u32 = 0;
+const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
+const GL_READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
+const GL_FRAMEBUFFER: u32 = 0x8D40;
+const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
+const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+const GL_BACK: u32 = 0x0405;
+const GL_PACK_ALIGNMENT: u32 = 0x0D05;
+const GL_RGBA: u32 = 0x1908;
+const GL_RGBA8: c_int = 0x8058;
+const GL_UNSIGNED_BYTE: u32 = 0x1401;
+const GL_TEXTURE_2D: u32 = 0x0DE1;
+const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
+const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
+const GL_TEXTURE_WRAP_S: u32 = 0x2802;
+const GL_TEXTURE_WRAP_T: u32 = 0x2803;
+const GL_LINEAR: c_int = 0x2601;
+const GL_CLAMP_TO_EDGE: c_int = 0x812F;
+
+const GlFns = struct {
+    lib: std.DynLib,
+    bindFramebuffer: *const fn (u32, u32) callconv(.c) void,
+    checkFramebufferStatus: *const fn (u32) callconv(.c) u32,
+    deleteFramebuffers: *const fn (c_int, [*]const u32) callconv(.c) void,
+    deleteTextures: *const fn (c_int, [*]const u32) callconv(.c) void,
+    framebufferTexture2D: *const fn (u32, u32, u32, u32, c_int) callconv(.c) void,
+    genFramebuffers: *const fn (c_int, [*]u32) callconv(.c) void,
+    genTextures: *const fn (c_int, [*]u32) callconv(.c) void,
+    getIntegerv: *const fn (u32, *c_int) callconv(.c) void,
+    bindTexture: *const fn (u32, u32) callconv(.c) void,
+    pixelStorei: *const fn (u32, c_int) callconv(.c) void,
+    readBuffer: *const fn (u32) callconv(.c) void,
+    readPixels: *const fn (c_int, c_int, c_int, c_int, u32, u32, ?*anyopaque) callconv(.c) void,
+    getError: *const fn () callconv(.c) u32,
+    texImage2D: *const fn (u32, c_int, c_int, c_int, c_int, c_int, u32, u32, ?*const anyopaque) callconv(.c) void,
+    texParameteri: *const fn (u32, u32, c_int) callconv(.c) void,
+
+    fn close(self: *GlFns) void {
+        self.lib.close();
+    }
+};
+
+pub const GlOffscreenTarget = struct {
+    framebuffer: u32 = 0,
+    texture: u32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+};
+
 pub const SparseFineFallback = enum {
     none,
     unsupported_packet,
@@ -553,6 +603,63 @@ pub const Device = struct {
         sg.endPass();
         timing.blit_encode_ns = elapsedSince(blit_start);
         timing.ok = true;
+        return true;
+    }
+
+    pub fn readPixelsGL(
+        self: *Device,
+        allocator: std.mem.Allocator,
+        framebuffer: u32,
+        target_width: u32,
+        target_height: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        dst_stride_bytes: usize,
+        dst: [*]u8,
+    ) bool {
+        _ = self;
+        if (sg.queryBackend() != .GLCORE and sg.queryBackend() != .GLES3) return false;
+        if (width == 0 or height == 0 or target_width == 0 or target_height == 0) return false;
+        const row_bytes = @as(usize, width) * 4;
+        if (dst_stride_bytes < row_bytes) return false;
+        const total_bytes = row_bytes * @as(usize, height);
+        const tight = allocator.alloc(u8, total_bytes) catch return false;
+        defer allocator.free(tight);
+
+        var gl = loadGlFns() orelse return false;
+        defer gl.close();
+
+        var previous_read_framebuffer: c_int = 0;
+        var previous_pack_alignment: c_int = 4;
+        gl.getIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_framebuffer);
+        gl.getIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
+        defer gl.bindFramebuffer(GL_READ_FRAMEBUFFER, @intCast(previous_read_framebuffer));
+        defer gl.pixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
+
+        gl.bindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+        gl.readBuffer(if (framebuffer == 0) GL_BACK else GL_COLOR_ATTACHMENT0);
+        gl.pixelStorei(GL_PACK_ALIGNMENT, 1);
+
+        const gl_y = target_height - y - height;
+        gl.readPixels(
+            @intCast(x),
+            @intCast(gl_y),
+            @intCast(width),
+            @intCast(height),
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            tight.ptr,
+        );
+        if (gl.getError() != GL_NO_ERROR) return false;
+
+        for (0..height) |row| {
+            const src_row = height - 1 - row;
+            const src_start = @as(usize, src_row) * row_bytes;
+            const dst_start = row * dst_stride_bytes;
+            @memcpy(dst[dst_start..][0..row_bytes], tight[src_start..][0..row_bytes]);
+        }
         return true;
     }
 
@@ -1064,6 +1171,152 @@ pub const Device = struct {
     }
 };
 
+fn loadGlFns() ?GlFns {
+    var lib = openGlLibrary() orelse return null;
+    const bind_framebuffer = lookupGlProc(&lib, *const fn (u32, u32) callconv(.c) void, "glBindFramebuffer") orelse {
+        lib.close();
+        return null;
+    };
+    const check_framebuffer_status = lookupGlProc(&lib, *const fn (u32) callconv(.c) u32, "glCheckFramebufferStatus") orelse {
+        lib.close();
+        return null;
+    };
+    const delete_framebuffers = lookupGlProc(&lib, *const fn (c_int, [*]const u32) callconv(.c) void, "glDeleteFramebuffers") orelse {
+        lib.close();
+        return null;
+    };
+    const delete_textures = lookupGlProc(&lib, *const fn (c_int, [*]const u32) callconv(.c) void, "glDeleteTextures") orelse {
+        lib.close();
+        return null;
+    };
+    const framebuffer_texture_2d = lookupGlProc(&lib, *const fn (u32, u32, u32, u32, c_int) callconv(.c) void, "glFramebufferTexture2D") orelse {
+        lib.close();
+        return null;
+    };
+    const gen_framebuffers = lookupGlProc(&lib, *const fn (c_int, [*]u32) callconv(.c) void, "glGenFramebuffers") orelse {
+        lib.close();
+        return null;
+    };
+    const gen_textures = lookupGlProc(&lib, *const fn (c_int, [*]u32) callconv(.c) void, "glGenTextures") orelse {
+        lib.close();
+        return null;
+    };
+    const get_integerv = lookupGlProc(&lib, *const fn (u32, *c_int) callconv(.c) void, "glGetIntegerv") orelse {
+        lib.close();
+        return null;
+    };
+    const bind_texture = lookupGlProc(&lib, *const fn (u32, u32) callconv(.c) void, "glBindTexture") orelse {
+        lib.close();
+        return null;
+    };
+    const pixel_storei = lookupGlProc(&lib, *const fn (u32, c_int) callconv(.c) void, "glPixelStorei") orelse {
+        lib.close();
+        return null;
+    };
+    const read_buffer = lookupGlProc(&lib, *const fn (u32) callconv(.c) void, "glReadBuffer") orelse {
+        lib.close();
+        return null;
+    };
+    const read_pixels = lookupGlProc(&lib, *const fn (c_int, c_int, c_int, c_int, u32, u32, ?*anyopaque) callconv(.c) void, "glReadPixels") orelse {
+        lib.close();
+        return null;
+    };
+    const get_error = lookupGlProc(&lib, *const fn () callconv(.c) u32, "glGetError") orelse {
+        lib.close();
+        return null;
+    };
+    const tex_image_2d = lookupGlProc(&lib, *const fn (u32, c_int, c_int, c_int, c_int, c_int, u32, u32, ?*const anyopaque) callconv(.c) void, "glTexImage2D") orelse {
+        lib.close();
+        return null;
+    };
+    const tex_parameteri = lookupGlProc(&lib, *const fn (u32, u32, c_int) callconv(.c) void, "glTexParameteri") orelse {
+        lib.close();
+        return null;
+    };
+    return .{
+        .lib = lib,
+        .bindFramebuffer = bind_framebuffer,
+        .checkFramebufferStatus = check_framebuffer_status,
+        .deleteFramebuffers = delete_framebuffers,
+        .deleteTextures = delete_textures,
+        .framebufferTexture2D = framebuffer_texture_2d,
+        .genFramebuffers = gen_framebuffers,
+        .genTextures = gen_textures,
+        .getIntegerv = get_integerv,
+        .bindTexture = bind_texture,
+        .pixelStorei = pixel_storei,
+        .readBuffer = read_buffer,
+        .readPixels = read_pixels,
+        .getError = get_error,
+        .texImage2D = tex_image_2d,
+        .texParameteri = tex_parameteri,
+    };
+}
+
+fn lookupGlProc(lib: *std.DynLib, comptime T: type, name: [:0]const u8) ?T {
+    if (lib.lookup(T, name)) |proc| return proc;
+    const GetProcAddress = *const fn ([*:0]const u8) callconv(.c) ?*const anyopaque;
+    if (lib.lookup(GetProcAddress, "glXGetProcAddressARB")) |get_proc| {
+        if (get_proc(name.ptr)) |proc| return @ptrCast(proc);
+    }
+    if (lib.lookup(GetProcAddress, "wglGetProcAddress")) |get_proc| {
+        if (get_proc(name.ptr)) |proc| return @ptrCast(proc);
+    }
+    return null;
+}
+
+fn openGlLibrary() ?std.DynLib {
+    const builtin = @import("builtin");
+    return switch (builtin.os.tag) {
+        .linux => std.DynLib.open("libGL.so.1") catch std.DynLib.open("libGL.so") catch null,
+        .macos => std.DynLib.open("/System/Library/Frameworks/OpenGL.framework/OpenGL") catch null,
+        .windows => std.DynLib.open("opengl32.dll") catch null,
+        else => null,
+    };
+}
+
+pub fn createGlOffscreenTarget(width: u32, height: u32) ?GlOffscreenTarget {
+    if (sg.queryBackend() != .GLCORE and sg.queryBackend() != .GLES3) return null;
+    if (width == 0 or height == 0) return null;
+    var gl = loadGlFns() orelse return null;
+    defer gl.close();
+
+    var previous_framebuffer: c_int = 0;
+    gl.getIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer);
+    defer gl.bindFramebuffer(GL_FRAMEBUFFER, @intCast(previous_framebuffer));
+
+    var target: GlOffscreenTarget = .{ .width = width, .height = height };
+    gl.genTextures(1, @ptrCast(&target.texture));
+    gl.bindTexture(GL_TEXTURE_2D, target.texture);
+    gl.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl.texImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, @intCast(width), @intCast(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, null);
+
+    gl.genFramebuffers(1, @ptrCast(&target.framebuffer));
+    gl.bindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
+    gl.framebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target.texture, 0);
+    if (gl.checkFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE or gl.getError() != GL_NO_ERROR) {
+        destroyGlOffscreenTarget(target);
+        return null;
+    }
+    return target;
+}
+
+pub fn destroyGlOffscreenTarget(target: GlOffscreenTarget) void {
+    var gl = loadGlFns() orelse return;
+    defer gl.close();
+    if (target.framebuffer != 0) {
+        var framebuffer = target.framebuffer;
+        gl.deleteFramebuffers(1, @ptrCast(&framebuffer));
+    }
+    if (target.texture != 0) {
+        var texture = target.texture;
+        gl.deleteTextures(1, @ptrCast(&texture));
+    }
+}
+
 pub fn smokeTriangle() SmokeTriangle {
     return .{
         .vertices = .{
@@ -1113,6 +1366,31 @@ pub fn passWithAction(action: PassAction) Pass {
 
 pub fn swapchainPassWithAction(action: PassAction, swapchain: Swapchain) Pass {
     return .{ .action = action, .swapchain = swapchain, .label = "okys_swapchain_pass" };
+}
+
+pub fn offscreenColorImageDesc(width: u32, height: u32) sg.ImageDesc {
+    return .{
+        .type = ._2D,
+        .usage = .{ .color_attachment = true },
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .pixel_format = .RGBA8,
+        .sample_count = 1,
+        .label = "okys_offscreen_color",
+    };
+}
+
+pub fn offscreenColorAttachmentViewDesc(image_handle: Image) sg.ViewDesc {
+    return .{
+        .color_attachment = .{ .image = image_handle },
+        .label = "okys_offscreen_color_attachment",
+    };
+}
+
+pub fn offscreenPassWithAction(action: PassAction, color_view: View) Pass {
+    var attachments: sg.Attachments = .{};
+    attachments.colors[0] = color_view;
+    return .{ .action = action, .attachments = attachments, .label = "okys_offscreen_pass" };
 }
 
 pub fn blitVertexBufferDesc() BufferDesc {

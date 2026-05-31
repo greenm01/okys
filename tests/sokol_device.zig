@@ -50,6 +50,23 @@ test "clear pass action clears and stores first color target" {
     try testing.expectApproxEqAbs(@as(f32, 1.0), action.colors[0].clear_value.a, 0.001);
 }
 
+test "offscreen pass helpers create rgba8 color attachment descriptors" {
+    const image_desc = sokol_device.offscreenColorImageDesc(64, 32);
+    try testing.expect(image_desc.usage.color_attachment);
+    try testing.expectEqual(@as(i32, 64), image_desc.width);
+    try testing.expectEqual(@as(i32, 32), image_desc.height);
+    try testing.expectEqual(@as(@TypeOf(image_desc.pixel_format), .RGBA8), image_desc.pixel_format);
+    try testing.expectEqual(@as(i32, 1), image_desc.sample_count);
+
+    const image = sokol_device.Image{ .id = 17 };
+    const view_desc = sokol_device.offscreenColorAttachmentViewDesc(image);
+    try testing.expectEqual(image, view_desc.color_attachment.image);
+
+    const view = sokol_device.View{ .id = 23 };
+    const pass = sokol_device.offscreenPassWithAction(sokol_device.loadPassAction(), view);
+    try testing.expectEqual(view, pass.attachments.colors[0]);
+}
+
 test "stencil cover pass action clears color and stencil" {
     const action = sokol_device.stencilCoverPassAction(.{ .r = 0.4, .g = 0.3, .b = 0.2, .a = 1.0 });
 

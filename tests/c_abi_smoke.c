@@ -32,6 +32,16 @@ int main(void) {
     okySetWebGPURenderTarget(NULL, NULL, 0, 0);
     okySetupWebGPU(sparse_ctx, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);
     okySetWebGPURenderTarget(sparse_ctx, NULL, 0, 0);
+    OKYreadPixelsDesc read_desc = {0};
+    unsigned char readback_pixels[16] = {0};
+    read_desc.w = 1;
+    read_desc.h = 1;
+    read_desc.format = OKY_PIXEL_FORMAT_RGBA8;
+    read_desc.dst_stride_bytes = 4;
+    read_desc.dst = readback_pixels;
+    assert(okyReadPixels(NULL, &read_desc) == OKY_READ_PIXELS_NO_GRAPHICS_RUNTIME);
+    assert(okyReadPixels(sparse_ctx, NULL) == OKY_READ_PIXELS_INVALID_ARGUMENT);
+    assert(okyReadPixels(sparse_ctx, &read_desc) == OKY_READ_PIXELS_NO_GRAPHICS_RUNTIME);
     okyDelete(sparse_ctx);
 
     okyBeginFrame(ctx, 800.0f, 600.0f, 1.0f);

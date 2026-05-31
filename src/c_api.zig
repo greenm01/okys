@@ -27,6 +27,8 @@ const GraphicsDesc = graphics_runtime.GraphicsDesc;
 const RenderTarget = graphics_runtime.RenderTarget;
 const GraphicsBackend = graphics_runtime.GraphicsBackend;
 const PixelFormat = graphics_runtime.PixelFormat;
+const ReadPixelsDesc = graphics_runtime.ReadPixelsDesc;
+const ReadPixelsStatus = graphics_runtime.ReadPixelsStatus;
 
 const version_string = "0.0.0";
 const abi_version: u32 = 0;
@@ -43,21 +45,21 @@ export fn okyVersionString() [*:0]const u8 {
 
 // --- lifecycle -------------------------------------------------------------
 
-export fn okyCreate(flags: c_int) ?*Context {
+pub export fn okyCreate(flags: c_int) ?*Context {
     return Context.create(std.heap.c_allocator, @intCast(flags)) catch null;
 }
 
-export fn okyDelete(ctx: ?*Context) void {
+pub export fn okyDelete(ctx: ?*Context) void {
     if (ctx) |c| c.destroy();
 }
 
 // --- frame -----------------------------------------------------------------
 
-export fn okyBeginFrame(ctx: ?*Context, w: f32, h: f32, dpr: f32) void {
+pub export fn okyBeginFrame(ctx: ?*Context, w: f32, h: f32, dpr: f32) void {
     if (ctx) |c| frame.beginFrame(c, w, h, dpr);
 }
 
-export fn okyEndFrame(ctx: ?*Context) void {
+pub export fn okyEndFrame(ctx: ?*Context) void {
     if (ctx) |c| frame.endFrame(c);
 }
 
@@ -76,14 +78,21 @@ export fn okySetupGraphics(ctx: ?*Context, desc: ?*const GraphicsDesc) c_int {
     return 1;
 }
 
-export fn okySetRenderTarget(ctx: ?*Context, target: ?*const RenderTarget) c_int {
+pub export fn okySetRenderTarget(ctx: ?*Context, target: ?*const RenderTarget) c_int {
     const c = ctx orelse return 0;
     const runtime = c.graphics orelse return 0;
     const t = target orelse return 0;
     return if (runtime.setRenderTarget(t.*)) 1 else 0;
 }
 
-export fn okySetupGL(ctx: ?*Context, sample_count: c_int) c_int {
+pub export fn okyReadPixels(ctx: ?*Context, desc: ?*const ReadPixelsDesc) c_int {
+    const c = ctx orelse return @intFromEnum(ReadPixelsStatus.no_graphics_runtime);
+    const d = desc orelse return @intFromEnum(ReadPixelsStatus.invalid_argument);
+    const runtime = c.graphics orelse return @intFromEnum(ReadPixelsStatus.no_graphics_runtime);
+    return @intFromEnum(runtime.readPixels(d.*));
+}
+
+pub export fn okySetupGL(ctx: ?*Context, sample_count: c_int) c_int {
     var desc: GraphicsDesc = .{
         .backend = @intFromEnum(GraphicsBackend.gl),
         .color_format = @intFromEnum(PixelFormat.rgba8),
@@ -244,7 +253,7 @@ export fn okyCurrentTransform(ctx: ?*Context, dst: ?[*]f32) void {
 
 // --- color helpers (pure) --------------------------------------------------
 
-export fn okyRGBA(r: u8, g: u8, b: u8, a: u8) Color {
+pub export fn okyRGBA(r: u8, g: u8, b: u8, a: u8) Color {
     return color.rgba(r, g, b, a);
 }
 
@@ -254,7 +263,7 @@ export fn okyRGBAf(r: f32, g: f32, b: f32, a: f32) Color {
 
 // --- paints ----------------------------------------------------------------
 
-export fn okyFillColor(ctx: ?*Context, col: Color) void {
+pub export fn okyFillColor(ctx: ?*Context, col: Color) void {
     if (ctx) |c| paint.fillColor(c, col);
 }
 
@@ -342,7 +351,7 @@ export fn okyResetScissor(ctx: ?*Context) void {
 
 // --- path building ---------------------------------------------------------
 
-export fn okyBeginPath(ctx: ?*Context) void {
+pub export fn okyBeginPath(ctx: ?*Context) void {
     if (ctx) |c| paths.beginPath(c);
 }
 
@@ -378,7 +387,7 @@ export fn okyArc(ctx: ?*Context, cx: f32, cy: f32, r: f32, a0: f32, a1: f32, dir
     if (ctx) |c| paths.arc(c, cx, cy, r, a0, a1, windingFromInt(dir));
 }
 
-export fn okyRect(ctx: ?*Context, x: f32, y: f32, w: f32, h: f32) void {
+pub export fn okyRect(ctx: ?*Context, x: f32, y: f32, w: f32, h: f32) void {
     if (ctx) |c| paths.rect(c, x, y, w, h);
 }
 
@@ -394,7 +403,7 @@ export fn okyEllipse(ctx: ?*Context, cx: f32, cy: f32, rx: f32, ry: f32) void {
     if (ctx) |c| paths.ellipse(c, cx, cy, rx, ry);
 }
 
-export fn okyCircle(ctx: ?*Context, cx: f32, cy: f32, r: f32) void {
+pub export fn okyCircle(ctx: ?*Context, cx: f32, cy: f32, r: f32) void {
     if (ctx) |c| paths.circle(c, cx, cy, r);
 }
 
@@ -482,7 +491,7 @@ export fn okyTextBreakLines(ctx: ?*Context, string: ?[*]const u8, end: ?[*]const
 
 // --- render ----------------------------------------------------------------
 
-export fn okyFill(ctx: ?*Context) void {
+pub export fn okyFill(ctx: ?*Context) void {
     if (ctx) |c| render_ops.fill(c);
 }
 
