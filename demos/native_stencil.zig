@@ -22,6 +22,8 @@ const OKY_ANTIALIAS: u32 = 1 << 0;
 const OKY_STENCIL_STROKES: u32 = 1 << 1;
 const scene_width: f32 = 960;
 const scene_height: f32 = 640;
+const checker_size = 16;
+const checker_square = 4;
 
 var device: sokol_device.Device = .{};
 var stencil_ctx: ?*Context = null;
@@ -141,11 +143,26 @@ fn cleanup() callconv(.c) void {
 }
 
 fn createCheckerImage(c: *Context) ImageId {
-    const pixels = [_]u8{
-        255, 255, 255, 255, 40,  80,  160, 255,
-        40,  80,  160, 255, 255, 255, 255, 255,
-    };
-    return image_ops.createImageRGBA(c, 2, 2, &pixels);
+    var pixels: [checker_size * checker_size * 4]u8 = undefined;
+    var y: usize = 0;
+    while (y < checker_size) : (y += 1) {
+        var x: usize = 0;
+        while (x < checker_size) : (x += 1) {
+            const dark = ((x / checker_square) + (y / checker_square)) % 2 == 0;
+            const index = (y * checker_size + x) * 4;
+            if (dark) {
+                pixels[index + 0] = 40;
+                pixels[index + 1] = 80;
+                pixels[index + 2] = 160;
+            } else {
+                pixels[index + 0] = 255;
+                pixels[index + 1] = 255;
+                pixels[index + 2] = 255;
+            }
+            pixels[index + 3] = 255;
+        }
+    }
+    return image_ops.createImageRGBA(c, checker_size, checker_size, &pixels);
 }
 
 fn drawScene(c: *Context, image_id: ImageId) void {
