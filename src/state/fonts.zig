@@ -10,6 +10,8 @@ const max_raster_pixels = 1024 * 1024;
 const curve_steps = 14;
 const sample_grid = 4;
 
+pub const FontGlyphId = tatfi.GlyphId;
+
 pub const ScaledMetrics = struct {
     ascender: f32,
     descender: f32,
@@ -39,6 +41,7 @@ pub const CachedGlyph = struct {
     codepoint: u21,
     size_bits: u32,
     dpr_bits: u32,
+    font_glyph_id: FontGlyphId,
     glyph: text.GlyphId,
     advance_x: f32,
 };
@@ -95,6 +98,13 @@ pub const FontStore = struct {
 
     pub fn glyphAdvance(self: *const FontStore, gpa: std.mem.Allocator, id: i32, size: f32, codepoint: u21) ?f32 {
         return (self.resolveGlyph(gpa, id, size, codepoint) orelse return null).advance_x;
+    }
+
+    pub fn glyphPairKerning(self: *const FontStore, id: i32, size: f32, left: FontGlyphId, right: FontGlyphId) ?f32 {
+        const font = self.record(id) orelse return null;
+        const face = font.face() orelse return null;
+        const units = glyphPairKerningUnits(face, left, right) orelse return null;
+        return @as(f32, @floatFromInt(units)) * scaleFor(face, size);
     }
 
     pub fn resolveGlyph(self: *const FontStore, gpa: std.mem.Allocator, id: i32, size: f32, codepoint: u21) ?ResolvedGlyph {
@@ -170,12 +180,13 @@ pub const FontStore = struct {
         return null;
     }
 
-    pub fn putCachedGlyph(self: *FontStore, gpa: std.mem.Allocator, font_id: i32, codepoint: u21, size: f32, dpr: f32, glyph: text.GlyphId, advance_x: f32) !void {
+    pub fn putCachedGlyph(self: *FontStore, gpa: std.mem.Allocator, font_id: i32, codepoint: u21, size: f32, dpr: f32, font_glyph_id: FontGlyphId, glyph: text.GlyphId, advance_x: f32) !void {
         try self.glyph_cache.append(gpa, .{
             .font_id = font_id,
             .codepoint = codepoint,
             .size_bits = floatBits(size),
             .dpr_bits = floatBits(dpr),
+            .font_glyph_id = font_glyph_id,
             .glyph = glyph,
             .advance_x = advance_x,
         });
@@ -209,6 +220,33 @@ pub const FontStore = struct {
         return null;
     }
 };
+
+fn glyphPairKerningUnits(face: tatfi.Face, left: FontGlyphId, right: FontGlyphId) ?i16 {
+    if (@TypeOf(face.tables.apple_layout) != void) {
+        if (face.tables.apple_layout.kerx) |kerx| {
+            var iterator = kerx.subtables.iterator();
+            while (iterator.next()) |subtable| {
+                if (!usableKerningSubtable(subtable)) continue;
+                if (subtable.glyphs_kerning(left, right)) |value| return value;
+            }
+        }
+    }
+    if (face.tables.kern) |kern| {
+        var iterator = kern.subtables.iterator();
+        while (iterator.next()) |subtable| {
+            if (!usableKerningSubtable(subtable)) continue;
+            if (subtable.glyphs_kerning(left, right)) |value| return value;
+        }
+    }
+    return null;
+}
+
+fn usableKerningSubtable(subtable: anytype) bool {
+    return subtable.horizontal and
+        !subtable.variable and
+        !subtable.has_cross_stream and
+        !subtable.has_state_machine;
+}
 
 const Point = struct {
     x: f32,

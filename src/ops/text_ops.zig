@@ -6,6 +6,7 @@ const color = @import("../types/color.zig");
 const image_ops = @import("image_ops.zig");
 const paint_ops = @import("paint_ops.zig");
 const text_types = @import("../types/text.zig");
+const fonts = @import("../state/fonts.zig");
 const draw_state = @import("../state/draw_state.zig");
 const Vertex = @import("../types/path.zig").Vertex;
 const xforms = @import("../systems/transform.zig");
@@ -153,9 +154,10 @@ pub fn text(ctx: *Context, x: f32, y: f32, bytes: []const u8) f32 {
         const codepoint = decodeCodepoint(bytes[i .. i + char_len]);
         const glyph = cachedGlyphForCodepoint(ctx, codepoint);
         if (glyph.glyph != .none) drawGlyphTinted(ctx, glyph.glyph, pen_x, baseline_y, tint);
-        pen_x += glyph.advance_x;
-        i += char_len;
-        if (i < bytes.len and bytes[i] != 0 and !isLineBreak(bytes[i])) pen_x += letterSpacing(ctx);
+        const next_i = i + char_len;
+        const next = layoutGlyphAt(ctx, bytes, next_i);
+        pen_x += advanceToNext(ctx, glyph.layout, next);
+        i = next_i;
     }
     return pen_x;
 }
@@ -211,17 +213,18 @@ pub fn glyphPositions(ctx: ?*const Context, x: f32, bytes: []const u8, positions
         if (b == 0) break;
         const char_len = codepointByteLen(bytes[i..]);
         const codepoint = decodeCodepoint(bytes[i .. i + char_len]);
-        const advance = glyphAdvance(ctx, codepoint);
+        const glyph = layoutGlyphForCodepoint(ctx, codepoint);
 
         positions[count] = .{
             .str = bytes.ptr + i,
             .x = pen_x,
             .minx = pen_x,
-            .maxx = pen_x + advance,
+            .maxx = pen_x + glyph.advance_x,
         };
         count += 1;
-        pen_x += advance + letterSpacing(ctx);
-        i += char_len;
+        const next_i = i + char_len;
+        pen_x += advanceToNext(ctx, glyph, layoutGlyphAt(ctx, bytes, next_i));
+        i = next_i;
     }
     return @intCast(count);
 }
@@ -264,17 +267,17 @@ pub fn breakLines(ctx: ?*const Context, bytes: []const u8, break_row_width: f32,
             }
 
             const char_len = codepointByteLen(bytes[next..]);
-            const codepoint = decodeCodepoint(bytes[next .. next + char_len]);
-            const advance = glyphAdvance(ctx, codepoint);
+            const char_end = next + char_len;
+            const candidate_width = textWidthFor(ctx, bytes[start..char_end]);
             if (isBreakSpace(b)) {
                 if (last_space_start == null or next > last_space_start.?) {
                     last_space_start = next;
-                    last_space_end = next + char_len;
+                    last_space_end = char_end;
                     last_space_width = row_width;
                 }
             }
 
-            if (row_width > 0 and row_width + advance > break_row_width and break_row_width > 0) {
+            if (row_width > 0 and candidate_width > break_row_width and break_row_width > 0) {
                 if (last_space_start) |space_start| {
                     end = trimTrailingSpaces(bytes, start, space_start);
                     next = skipSpaces(bytes, last_space_end.?);
@@ -283,16 +286,16 @@ pub fn breakLines(ctx: ?*const Context, bytes: []const u8, break_row_width: f32,
                     end = next;
                 }
                 if (end == start) {
-                    end = next + char_len;
+                    end = char_end;
                     next = end;
-                    end_width = advance;
+                    end_width = candidate_width;
                 }
                 break;
             }
 
-            next += char_len;
+            next = char_end;
             end = next;
-            row_width += advance + letterSpacing(ctx);
+            row_width = candidate_width;
             end_width = row_width;
         }
 
@@ -319,16 +322,16 @@ pub fn breakLines(ctx: ?*const Context, bytes: []const u8, break_row_width: f32,
 fn textWidthFor(ctx: ?*const Context, bytes: []const u8) f32 {
     var width: f32 = 0;
     var i: usize = 0;
-    var emitted: usize = 0;
     while (i < bytes.len) {
         const b = bytes[i];
         if (b == 0 or isLineBreak(b)) break;
         const char_len = codepointByteLen(bytes[i..]);
-        width += glyphAdvance(ctx, decodeCodepoint(bytes[i .. i + char_len]));
-        emitted += 1;
-        i += char_len;
+        const glyph = layoutGlyphForCodepoint(ctx, decodeCodepoint(bytes[i .. i + char_len]));
+        const next_i = i + char_len;
+        const next = layoutGlyphAt(ctx, bytes, next_i);
+        width += advanceToNext(ctx, glyph, next);
+        i = next_i;
     }
-    if (emitted > 1) width += @as(f32, @floatFromInt(emitted - 1)) * letterSpacing(ctx);
     return width;
 }
 
@@ -368,6 +371,12 @@ fn alignedBaselineY(ctx: *const Context, y: f32) f32 {
 
 const CachedTextGlyph = struct {
     glyph: GlyphId = .none,
+    layout: LayoutGlyph = .{},
+};
+
+const LayoutGlyph = struct {
+    font_id: i32 = 0,
+    font_glyph_id: ?fonts.FontGlyphId = null,
     advance_x: f32 = 0,
 };
 
@@ -377,29 +386,82 @@ fn cachedGlyphForCodepoint(ctx: *Context, codepoint: u21) CachedTextGlyph {
     const size = state.font_size;
     const dpr = if (ctx.device_pixel_ratio > 0) ctx.device_pixel_ratio else 1;
     if (ctx.fonts.cachedGlyph(font_id, codepoint, size, dpr)) |cached| {
-        return .{ .glyph = cached.glyph, .advance_x = cached.advance_x };
+        return .{
+            .glyph = cached.glyph,
+            .layout = .{
+                .font_id = cached.font_id,
+                .font_glyph_id = cached.font_glyph_id,
+                .advance_x = cached.advance_x,
+            },
+        };
     }
 
     const resolved = ctx.fonts.resolveGlyph(ctx.gpa, font_id, size, codepoint) orelse {
-        return .{ .advance_x = glyphAdvance(ctx, codepoint) };
+        return .{ .layout = .{ .advance_x = glyphAdvance(ctx, codepoint) } };
     };
     const glyph_id = rasterizeAndCacheGlyph(ctx, codepoint, resolved, size, dpr);
-    return .{ .glyph = glyph_id, .advance_x = resolved.advance_x };
+    return .{
+        .glyph = glyph_id,
+        .layout = .{
+            .font_id = resolved.font_id,
+            .font_glyph_id = resolved.glyph_id,
+            .advance_x = resolved.advance_x,
+        },
+    };
 }
 
-fn rasterizeAndCacheGlyph(ctx: *Context, codepoint: u21, resolved: @import("../state/fonts.zig").ResolvedGlyph, size: f32, dpr: f32) GlyphId {
+fn layoutGlyphAt(ctx: ?*const Context, bytes: []const u8, index: usize) ?LayoutGlyph {
+    if (index >= bytes.len) return null;
+    const b = bytes[index];
+    if (b == 0 or isLineBreak(b)) return null;
+    const char_len = codepointByteLen(bytes[index..]);
+    return layoutGlyphForCodepoint(ctx, decodeCodepoint(bytes[index .. index + char_len]));
+}
+
+fn layoutGlyphForCodepoint(ctx: ?*const Context, codepoint: u21) LayoutGlyph {
+    const c = ctx orelse return .{ .advance_x = fallback_advance };
+    const state = c.states.items[c.states.items.len - 1];
+    if (c.fonts.resolveGlyph(c.gpa, state.font_id, state.font_size, codepoint)) |resolved| {
+        return .{
+            .font_id = resolved.font_id,
+            .font_glyph_id = resolved.glyph_id,
+            .advance_x = resolved.advance_x,
+        };
+    }
+    return .{ .advance_x = fallback_advance * (state.font_size / fallback_font_size) };
+}
+
+fn advanceToNext(ctx: ?*const Context, glyph: LayoutGlyph, next: ?LayoutGlyph) f32 {
+    var advance = glyph.advance_x;
+    if (next) |right| {
+        advance += pairKerning(ctx, glyph, right);
+        advance += letterSpacing(ctx);
+    }
+    return advance;
+}
+
+fn pairKerning(ctx: ?*const Context, left: LayoutGlyph, right: LayoutGlyph) f32 {
+    const c = ctx orelse return 0;
+    if (left.font_id == 0 or left.font_id != right.font_id) return 0;
+    const left_id = left.font_glyph_id orelse return 0;
+    const right_id = right.font_glyph_id orelse return 0;
+    const state = c.states.items[c.states.items.len - 1];
+    return c.fonts.glyphPairKerning(left.font_id, state.font_size, left_id, right_id) orelse 0;
+}
+
+fn rasterizeAndCacheGlyph(ctx: *Context, codepoint: u21, resolved: fonts.ResolvedGlyph, size: f32, dpr: f32) GlyphId {
     if (ctx.glyph_atlas.image_id == .none and !initGlyphAtlas(ctx, default_atlas_size, default_atlas_size)) return .none;
 
     var raster = ctx.fonts.rasterizeGlyph(ctx.gpa, resolved, size, dpr) catch return .none;
     defer raster.deinit(ctx.gpa);
     if (raster.width == 0 or raster.height == 0 or raster.alpha.len == 0) {
-        ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, .none, raster.metrics.advance_x) catch {};
+        ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, resolved.glyph_id, .none, raster.metrics.advance_x) catch {};
         return .none;
     }
 
     const glyph_id = ctx.glyph_atlas.addGlyphAlpha(ctx.gpa, raster.alpha, raster.width, raster.height, raster.metrics) catch return .none;
     uploadGlyphAlpha(ctx, glyph_id, raster.alpha, raster.width, raster.height);
-    ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, glyph_id, raster.metrics.advance_x) catch {};
+    ctx.fonts.putCachedGlyph(ctx.gpa, resolved.font_id, codepoint, size, dpr, resolved.glyph_id, glyph_id, raster.metrics.advance_x) catch {};
     return glyph_id;
 }
 

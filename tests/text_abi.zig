@@ -110,6 +110,38 @@ test "font loading uses Tatfi metrics and glyph advances" {
     try testing.expect(positions[1].x > positions[0].x);
 }
 
+test "Tatfi kern pairs feed text layout" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    const id = text_ops.createFont(ctx, "kern", "/usr/share/fonts/TTF/Vera.ttf");
+    if (id <= 0) return error.SkipZigTest;
+
+    text_ops.fontFaceId(ctx, id);
+    text_ops.fontSize(ctx, 32);
+
+    const glyph_a = ctx.fonts.resolveGlyph(ctx.gpa, id, ctx.state().font_size, 'A') orelse return error.SkipZigTest;
+    const glyph_v = ctx.fonts.resolveGlyph(ctx.gpa, id, ctx.state().font_size, 'V') orelse return error.SkipZigTest;
+    const kern = ctx.fonts.glyphPairKerning(id, ctx.state().font_size, glyph_a.glyph_id, glyph_v.glyph_id) orelse return error.SkipZigTest;
+    try testing.expect(kern < 0);
+
+    const width_a = text_ops.text(ctx, 0, 0, "A");
+    const width_v = text_ops.text(ctx, 0, 0, "V");
+    const width_av = text_ops.text(ctx, 0, 0, "AV");
+    try testing.expectApproxEqAbs(width_a + width_v + kern, width_av, 0.001);
+    try testing.expect(width_av < width_a + width_v);
+
+    var positions: [2]text_ops.TextGlyphPosition = undefined;
+    const count = text_ops.glyphPositions(ctx, 0, "AV", &positions);
+    try testing.expectEqual(@as(c_int, 2), count);
+    try testing.expectApproxEqAbs(width_a + kern, positions[1].x, 0.001);
+
+    var rows: [2]text_ops.TextRow = undefined;
+    const row_count = text_ops.breakLines(ctx, "AV AV", width_av + 0.001, &rows);
+    try testing.expectEqual(@as(c_int, 2), row_count);
+    try testing.expectApproxEqAbs(width_av, rows[0].width, 0.001);
+}
+
 test "font text state saves and restores" {
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
