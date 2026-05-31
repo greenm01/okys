@@ -21,26 +21,30 @@ header is hand-written and is the source of truth for the ABI.
 
 ## Platforms
 
-Desktop is the target. sokol picks the native backend per platform — Metal on
-macOS, D3D11 on Windows, Vulkan or GL on Linux — all of which have the compute
-support the tiled rasterizer needs. The browser is secondary: sokol's default
-web build is WebGL2, which has no compute, so the tiled rasterizer there needs
-sokol's WebGPU backend; on WebGL2 it falls back to stencil-then-cover.
+Desktop is the target. `-Dbackend=native` lets sokol pick the platform default:
+Metal on macOS, D3D11 on Windows, and GLCORE on Linux. Linux callers can opt into
+Vulkan with `-Dbackend=vulkan`. WebGPU is an explicit bridge for hosts that
+already own a WebGPU device and current texture view.
 
 ## Build
 
 ```sh
-zig build         # static library + C header -> zig-out/
-zig build test    # unit tests + C ABI smoke test
+zig build                  # static library + C header -> zig-out/
+zig build -Dbackend=gl     # force GL-flavored sokol_clib
+zig build -Dbackend=vulkan # force Vulkan-flavored sokol_clib
+zig build -Dbackend=wgpu   # force WebGPU-flavored sokol_clib
+zig build test             # unit tests + C ABI smoke test
 ```
 
 Artifacts: `zig-out/lib/libokys.a` and `zig-out/include/okys.h`.
 
 ## Status
 
-Early. The C ABI, front-end state, command recording, and the render-interface
-seam exist, with comptime layout assertions on the ABI structs. No backend is
-implemented yet: fills and strokes record geometry but don't draw.
+The C ABI, NanoVG-style front-end, stencil-cover fallback, sparse-strip CPU proof,
+and sparse GPU fine path are in place. Native hosts must install a graphics
+runtime after creating their device or context. GL callers use `okySetupGL`;
+WebGPU callers use `okySetupWebGPU` plus `okySetWebGPURenderTarget` each frame.
+See `examples/c_glfw_minimal.c` for the GL call order.
 
 ## License
 
