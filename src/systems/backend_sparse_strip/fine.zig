@@ -275,16 +275,24 @@ fn sampleImagePattern(paint: *const color.Paint, texture: *const Texture, px: f3
 
     const inv = xforms.inverse(&paint.xform) orelse xforms.identity();
     const pt = xforms.point(&inv, px, py);
-    const ix = wrappedIndex(pt[0], paint.extent[0], texture.width);
-    const iy = wrappedIndex(pt[1], paint.extent[1], texture.height);
-    const index = (@as(usize, iy) * @as(usize, texture.width) + ix) * 4;
-    const alpha = u8ToNorm(texture.pixels[index + 3]) * paint.inner_color.a;
+    const sample = sampleWrappedLinear(texture, pt[0], pt[1], paint.extent);
+    const alpha = sample.a * paint.inner_color.a;
     return .{
-        .r = u8ToNorm(texture.pixels[index + 0]) * alpha,
-        .g = u8ToNorm(texture.pixels[index + 1]) * alpha,
-        .b = u8ToNorm(texture.pixels[index + 2]) * alpha,
+        .r = sample.r * alpha,
+        .g = sample.g * alpha,
+        .b = sample.b * alpha,
         .a = alpha,
     };
+}
+
+fn sampleWrappedLinear(texture: *const Texture, x: f32, y: f32, extent: [2]f32) ColorF {
+    const tx = wrappedTexelCoord(x, extent[0], texture.width);
+    const ty = wrappedTexelCoord(y, extent[1], texture.height);
+    const c00 = texel(texture, tx.i0, ty.i0);
+    const c10 = texel(texture, tx.i1, ty.i0);
+    const c01 = texel(texture, tx.i0, ty.i1);
+    const c11 = texel(texture, tx.i1, ty.i1);
+    return mixColor(mixColor(c00, c10, tx.t), mixColor(c01, c11, tx.t), ty.t);
 }
 
 fn scissorMask(scissor: *const color.Scissor, px: f32, py: f32) f32 {
@@ -308,12 +316,48 @@ fn findTexture(textures: []const Texture, id: image.ImageId) ?*const Texture {
     return null;
 }
 
-fn wrappedIndex(value: f32, extent: f32, size: u32) u32 {
-    if (size == 0) return 0;
+const WrappedTexelCoord = struct {
+    i0: u32,
+    i1: u32,
+    t: f32,
+};
+
+fn wrappedTexelCoord(value: f32, extent: f32, size: u32) WrappedTexelCoord {
+    if (size == 0) return .{ .i0 = 0, .i1 = 0, .t = 0 };
     const local_extent = if (@abs(extent) > 0.0001) @abs(extent) else @as(f32, @floatFromInt(size));
-    const scaled = value / local_extent * @as(f32, @floatFromInt(size));
-    const wrapped = @mod(@floor(scaled), @as(f32, @floatFromInt(size)));
-    return @intFromFloat(wrapped);
+    const scaled = value / local_extent * @as(f32, @floatFromInt(size)) - 0.5;
+    const base = @floor(scaled);
+    const base_index: i32 = @intFromFloat(base);
+    return .{
+        .i0 = wrapIndex(base_index, size),
+        .i1 = wrapIndex(base_index + 1, size),
+        .t = scaled - base,
+    };
+}
+
+fn wrapIndex(index: i32, size: u32) u32 {
+    const size_i32: i32 = @intCast(size);
+    return @intCast(@mod(index, size_i32));
+}
+
+fn texel(texture: *const Texture, x: u32, y: u32) ColorF {
+    const index = (@as(usize, y) * @as(usize, texture.width) + x) * 4;
+    return .{
+        .r = u8ToNorm(texture.pixels[index + 0]),
+        .g = u8ToNorm(texture.pixels[index + 1]),
+        .b = u8ToNorm(texture.pixels[index + 2]),
+        .a = u8ToNorm(texture.pixels[index + 3]),
+    };
+}
+
+fn mixColor(a: ColorF, b: ColorF, t: f32) ColorF {
+    const inv = 1 - t;
+    return .{
+        .r = a.r * inv + b.r * t,
+        .g = a.g * inv + b.g * t,
+        .b = a.b * inv + b.b * t,
+        .a = a.a * inv + b.a * t,
+    };
 }
 
 fn sdroundrect(pt: [2]f32, ext: [2]f32, rad: f32) f32 {

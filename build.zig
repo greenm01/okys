@@ -38,6 +38,20 @@ pub fn build(b: *std.Build) !void {
         },
         .reflection = true,
     });
+    const mod_okys_blit_shader = try sokol.shdc.createModule(b, "okys_blit_shader", mod_sokol, .{
+        .shdc_dep = dep_sokol.builder.dependency("shdc", .{}),
+        .input = "src/shaders/blit.glsl",
+        .output = "okys_blit_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+            .spirv_vk = true,
+        },
+        .reflection = true,
+    });
 
     const okys_mod = b.createModule(.{
         .root_source_file = b.path("src/okys.zig"),
@@ -48,6 +62,7 @@ pub fn build(b: *std.Build) !void {
     okys_mod.addImport("sokol", mod_sokol);
     okys_mod.addImport("okys_shader", mod_okys_shader);
     okys_mod.addImport("okys_path_shader", mod_okys_path_shader);
+    okys_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
 
     const native_demo_mod = b.createModule(.{
         .root_source_file = b.path("demos/native_stencil.zig"),
@@ -62,10 +77,10 @@ pub fn build(b: *std.Build) !void {
         .name = "okys_native_stencil_demo",
         .root_module = native_demo_mod,
     });
-    const demo_native_step = b.step("demo-native", "Build the native stencil-cover demo");
+    const demo_native_step = b.step("demo-native", "Build the native renderer comparison demo");
     demo_native_step.dependOn(&b.addInstallArtifact(native_demo, .{}).step);
     const run_native_demo = b.addRunArtifact(native_demo);
-    const run_demo_native_step = b.step("run-demo-native", "Run the native stencil-cover demo");
+    const run_demo_native_step = b.step("run-demo-native", "Run the native renderer comparison demo");
     run_demo_native_step.dependOn(&run_native_demo.step);
 
     // The C ABI static library. Root is c_api.zig so its export fns are roots.

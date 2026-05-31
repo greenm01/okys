@@ -91,6 +91,7 @@ test "golden replay covers fills paints holes scissor and thin overlap cases" {
     try testing.expect(scene.backend.uniforms.items.len >= 6);
     try testing.expect(scene.backend.frag_params.items.len == scene.backend.uniforms.items.len);
     try testing.expect(hasImageUniform(scene.backend, @intCast(@intFromEnum(image_id))));
+    try testing.expect(hasImageFragmentParams(scene.backend, @intCast(@intFromEnum(image_id))));
     try testing.expect(hasScissorUniform(scene.backend));
 }
 
@@ -159,6 +160,13 @@ fn countDrawOps(backend: *const Backend, kind: DrawOpKind) usize {
 fn hasImageUniform(backend: *const Backend, image_id: i32) bool {
     for (backend.uniforms.items) |uniform| {
         if (uniform.image == image_id) return true;
+    }
+    return false;
+}
+
+fn hasImageFragmentParams(backend: *const Backend, image_id: i32) bool {
+    for (backend.frag_params.items) |params| {
+        if (params.params[1] > 0.5 and params.params[2] == @as(f32, @floatFromInt(image_id))) return true;
     }
     return false;
 }

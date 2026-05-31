@@ -252,3 +252,21 @@ test "stencil backend texture callbacks store dimensions" {
     iface.delete_texture(iface.ctx, id);
     try testing.expect(iface.texture_size(iface.ctx, id) == null);
 }
+
+test "stencil backend texture callbacks retain and update rgba pixels" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    const id: ImageId = @enumFromInt(42);
+
+    const pixels = [_]u8{
+        255, 0, 0,   255, 0,   255, 0,   255,
+        0,   0, 255, 255, 255, 255, 255, 255,
+    };
+    try testing.expect(iface.create_texture(iface.ctx, id, 2, 2, .rgba8, &pixels));
+    try testing.expectEqualSlices(u8, &pixels, backend.textures.get(id).?.pixels.items);
+
+    const replacement = [_]u8{ 16, 32, 48, 255 };
+    iface.update_texture(iface.ctx, id, 1, 0, 1, 1, &replacement);
+    try testing.expectEqualSlices(u8, &replacement, backend.textures.get(id).?.pixels.items[4..8]);
+}

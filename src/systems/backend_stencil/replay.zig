@@ -209,7 +209,12 @@ fn packFragmentParams(uniform: draw_plan.PaintUniform) sokol_device.PathFsParams
             uniform.radius,
             uniform.feather,
         },
-        .params = .{ uniform.edge_alpha_multiplier, 0, 0, 0 },
+        .params = .{
+            uniform.edge_alpha_multiplier,
+            if (uniform.image > 0) 1 else 0,
+            if (uniform.image > 0) @floatFromInt(uniform.image) else 0,
+            0,
+        },
     };
 }
 

@@ -91,6 +91,29 @@ test "path bindings carry vertex and index buffer offsets" {
     try testing.expectEqual(@as(i32, 256), indexed.index_buffer_offset);
 }
 
+test "path texture descriptors and bindings use generated slots" {
+    const image_desc = sokol_device.pathTextureImageDesc(16, 8);
+    try testing.expectEqual(@as(i32, 16), image_desc.width);
+    try testing.expectEqual(@as(i32, 8), image_desc.height);
+    try testing.expect(image_desc.usage.stream_update);
+    try testing.expectEqual(@as(@TypeOf(image_desc.pixel_format), .RGBA8), image_desc.pixel_format);
+
+    const sampler_desc = sokol_device.pathTextureSamplerDesc();
+    try testing.expectEqual(@as(@TypeOf(sampler_desc.min_filter), .LINEAR), sampler_desc.min_filter);
+    try testing.expectEqual(@as(@TypeOf(sampler_desc.mag_filter), .LINEAR), sampler_desc.mag_filter);
+    try testing.expectEqual(@as(@TypeOf(sampler_desc.wrap_u), .REPEAT), sampler_desc.wrap_u);
+    try testing.expectEqual(@as(@TypeOf(sampler_desc.wrap_v), .REPEAT), sampler_desc.wrap_v);
+
+    const vertex_buffer = sokol_device.Buffer{ .id = 11 };
+    const index_buffer = sokol_device.Buffer{ .id = 12 };
+    const view = sokol_device.View{ .id = 13 };
+    const sampler = sokol_device.Sampler{ .id = 14 };
+    const bindings = sokol_device.pathIndexedTextureBindings(vertex_buffer, index_buffer, 0, 0, view, sampler);
+    try testing.expectEqual(view, bindings.views[sokol_device.path_image_view_slot]);
+    try testing.expectEqual(sampler, bindings.samplers[sokol_device.path_image_sampler_slot]);
+    try testing.expectEqual(index_buffer, bindings.index_buffer);
+}
+
 test "path pipeline descriptor uses path vertex layout" {
     const shader = sokol_device.Shader{ .id = 7 };
     const desc = sokol_device.pathPipelineDesc(shader, .cover);

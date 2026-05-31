@@ -42,6 +42,8 @@ layout(binding=1) uniform fs_params {
     vec4 extent_radius_feather;
     vec4 params;
 };
+layout(binding=0) uniform texture2D image_tex;
+layout(binding=0) uniform sampler image_smp;
 
 in vec2 frag_uv;
 in vec2 frag_pos;
@@ -77,10 +79,20 @@ float edgeMask(vec2 uv) {
 }
 
 void main() {
+    float scissor = scissorMask(frag_pos);
+    float edge = edgeMask(frag_uv);
     vec2 pt = (paintMat() * vec3(frag_pos, 1.0)).xy;
+    if (params.y > 0.5) {
+        vec2 image_extent = max(abs(extent_radius_feather.xy), vec2(0.0001));
+        vec4 sample_color = texture(sampler2D(image_tex, image_smp), pt / image_extent);
+        float alpha = sample_color.a * inner_color.a;
+        frag_color = vec4(sample_color.rgb * alpha, alpha) * scissor * edge;
+        return;
+    }
+
     float feather = max(extent_radius_feather.w, 0.0001);
     float d = clamp((sdroundrect(pt, extent_radius_feather.xy, extent_radius_feather.z) + feather * 0.5) / feather, 0.0, 1.0);
-    frag_color = mix(inner_color, outer_color, d) * scissorMask(frag_pos) * edgeMask(frag_uv);
+    frag_color = mix(inner_color, outer_color, d) * scissor * edge;
 }
 @end
 

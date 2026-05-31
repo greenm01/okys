@@ -3,6 +3,8 @@
 
 const sokol = @import("sokol");
 const sg = sokol.gfx;
+const blit_shader = @import("okys_blit_shader");
+const image = @import("../types/image.zig");
 const path = @import("../types/path.zig");
 const path_shader = @import("okys_path_shader");
 const smoke_shader = @import("okys_shader");
@@ -14,10 +16,20 @@ pub const Pipeline = sg.Pipeline;
 pub const Pass = sg.Pass;
 pub const Bindings = sg.Bindings;
 pub const Color = sg.Color;
+pub const Image = sg.Image;
+pub const Sampler = sg.Sampler;
+pub const View = sg.View;
 pub const PassAction = sg.PassAction;
 pub const Swapchain = sg.Swapchain;
 pub const BufferDesc = sg.BufferDesc;
 pub const PipelineDesc = sg.PipelineDesc;
+
+pub const blit_position_attr = blit_shader.ATTR_blit_position;
+pub const blit_uv_attr = blit_shader.ATTR_blit_uv;
+pub const blit_vs_params_slot = blit_shader.UB_vs_params;
+pub const blit_view_slot = blit_shader.VIEW_sparse_tex;
+pub const blit_sampler_slot = blit_shader.SMP_sparse_smp;
+pub const BlitVsParams = blit_shader.VsParams;
 
 pub const smoke_position_attr = smoke_shader.ATTR_smoke_position;
 pub const smoke_color_attr = smoke_shader.ATTR_smoke_color0;
@@ -28,8 +40,13 @@ pub const path_cover_position_attr = path_shader.ATTR_path_cover_position;
 pub const path_cover_uv_attr = path_shader.ATTR_path_cover_uv;
 pub const path_vs_params_slot = path_shader.UB_vs_params;
 pub const path_fs_params_slot = path_shader.UB_fs_params;
+pub const path_image_view_slot = path_shader.VIEW_image_tex;
+pub const path_image_sampler_slot = path_shader.SMP_image_smp;
 pub const PathVsParams = path_shader.VsParams;
 pub const PathFsParams = path_shader.FsParams;
+pub const max_path_textures = 64;
+
+const path_default_texture_pixels = [_]u8{ 255, 255, 255, 255 };
 
 pub const PathPipelineKind = enum {
     stencil_nonzero,
@@ -83,11 +100,49 @@ pub const SmokeTriangle = struct {
     vertices: [3]SmokeVertex,
 };
 
+pub const PathTexture = struct {
+    id: u32,
+    width: u32,
+    height: u32,
+    format: image.TexFormat,
+    pixels: []const u8,
+};
+
+const PathTextureResource = struct {
+    id: u32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+    image: Image = .{},
+    view: View = .{},
+};
+
+pub const BlitRect = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
+pub const BlitVertex = extern struct {
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+};
+
 pub const Device = struct {
     owns_setup: bool = false,
     width: i32 = 0,
     height: i32 = 0,
     dpr: f32 = 1.0,
+    blit_shader: Shader = .{},
+    blit_pipeline: Pipeline = .{},
+    blit_vertices: Buffer = .{},
+    blit_image: Image = .{},
+    blit_sampler: Sampler = .{},
+    blit_view: View = .{},
+    blit_width: u32 = 0,
+    blit_height: u32 = 0,
     smoke_shader: Shader = .{},
     smoke_pipeline: Pipeline = .{},
     smoke_vertices: Buffer = .{},
@@ -101,6 +156,10 @@ pub const Device = struct {
     path_fringe_stencil_pipeline: Pipeline = .{},
     path_fringe_pipeline: Pipeline = .{},
     path_triangles_pipeline: Pipeline = .{},
+    path_texture_sampler: Sampler = .{},
+    path_default_image: Image = .{},
+    path_default_view: View = .{},
+    path_textures: [max_path_textures]PathTextureResource = @splat(.{}),
     path_vertex_buffer: Buffer = .{},
     path_index_buffer: Buffer = .{},
     path_vertex_capacity: usize = 0,
@@ -116,7 +175,9 @@ pub const Device = struct {
     }
 
     pub fn deinit(self: *Device) void {
+        self.destroyBlitResources();
         self.destroySmokeResources();
+        self.destroyPathTextureResources();
         self.destroyPathResources();
         if (self.owns_setup) {
             sg.shutdown();
@@ -154,6 +215,78 @@ pub const Device = struct {
             self.smoke_vertices = .{};
         }
         self.smoke_bindings = .{};
+    }
+
+    pub fn createBlitResources(self: *Device, surface_width: u32, surface_height: u32) void {
+        self.destroyBlitResources();
+
+        self.blit_shader = sg.makeShader(blit_shader.blitShaderDesc(sg.queryBackend()));
+        self.blit_pipeline = sg.makePipeline(blitPipelineDesc(self.blit_shader));
+        self.blit_vertices = sg.makeBuffer(blitVertexBufferDesc());
+        self.blit_image = sg.makeImage(blitImageDesc(surface_width, surface_height));
+        self.blit_sampler = sg.makeSampler(blitSamplerDesc());
+        self.blit_view = sg.makeView(blitTextureViewDesc(self.blit_image));
+        self.blit_width = surface_width;
+        self.blit_height = surface_height;
+    }
+
+    pub fn destroyBlitResources(self: *Device) void {
+        if (self.blit_view.id != 0) {
+            sg.destroyView(self.blit_view);
+            self.blit_view = .{};
+        }
+        if (self.blit_sampler.id != 0) {
+            sg.destroySampler(self.blit_sampler);
+            self.blit_sampler = .{};
+        }
+        if (self.blit_image.id != 0) {
+            sg.destroyImage(self.blit_image);
+            self.blit_image = .{};
+        }
+        if (self.blit_vertices.id != 0) {
+            sg.destroyBuffer(self.blit_vertices);
+            self.blit_vertices = .{};
+        }
+        if (self.blit_pipeline.id != 0) {
+            sg.destroyPipeline(self.blit_pipeline);
+            self.blit_pipeline = .{};
+        }
+        if (self.blit_shader.id != 0) {
+            sg.destroyShader(self.blit_shader);
+            self.blit_shader = .{};
+        }
+        self.blit_width = 0;
+        self.blit_height = 0;
+    }
+
+    pub fn drawRgbaSurface(
+        self: *Device,
+        pass: Pass,
+        pixels: []const u8,
+        surface_width: u32,
+        surface_height: u32,
+        dest: BlitRect,
+        view_width: f32,
+        view_height: f32,
+    ) void {
+        if (surface_width == 0 or surface_height == 0) return;
+        if (pixels.len != @as(usize, surface_width) * @as(usize, surface_height) * 4) return;
+        self.ensureBlitResources(surface_width, surface_height);
+
+        var image_data: sg.ImageData = .{};
+        image_data.mip_levels[0] = rangeFromSlice(u8, pixels);
+        sg.updateImage(self.blit_image, image_data);
+
+        const vertices = blitQuad(dest);
+        sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+
+        self.beginPass(pass);
+        const params = blitVsParams(view_width, view_height);
+        sg.applyPipeline(self.blit_pipeline);
+        sg.applyBindings(blitBindings(self.blit_vertices, self.blit_view, self.blit_sampler));
+        sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
+        sg.draw(0, 4, 1);
+        sg.endPass();
     }
 
     pub fn createPathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
@@ -222,6 +355,24 @@ pub const Device = struct {
         }
         self.path_vertex_capacity = 0;
         self.path_index_capacity = 0;
+    }
+
+    pub fn destroyPathTextureResources(self: *Device) void {
+        for (&self.path_textures) |*texture| {
+            self.destroyPathTextureResource(texture);
+        }
+        if (self.path_default_view.id != 0) {
+            sg.destroyView(self.path_default_view);
+            self.path_default_view = .{};
+        }
+        if (self.path_default_image.id != 0) {
+            sg.destroyImage(self.path_default_image);
+            self.path_default_image = .{};
+        }
+        if (self.path_texture_sampler.id != 0) {
+            sg.destroySampler(self.path_texture_sampler);
+            self.path_texture_sampler = .{};
+        }
     }
 
     pub fn beginPass(self: *const Device, pass: Pass) void {
@@ -325,9 +476,24 @@ pub const Device = struct {
         view_width: f32,
         view_height: f32,
     ) void {
+        self.drawPathPassWithTextures(pass, vertices, indices, path_draws, frag_params, &.{}, view_width, view_height);
+    }
+
+    pub fn drawPathPassWithTextures(
+        self: *Device,
+        pass: Pass,
+        vertices: []const path.Vertex,
+        indices: []const u16,
+        path_draws: []const PathDraw,
+        frag_params: []const PathFsParams,
+        textures: []const PathTexture,
+        view_width: f32,
+        view_height: f32,
+    ) void {
         if (vertices.len == 0 or path_draws.len == 0) return;
         if (needsIndexBuffer(path_draws) and indices.len == 0) return;
         self.ensurePathResources(vertices.len, indices.len);
+        self.ensurePathTextureResources(textures);
 
         sg.updateBuffer(self.path_vertex_buffer, rangeFromSlice(path.Vertex, vertices));
         if (indices.len > 0) {
@@ -345,15 +511,22 @@ pub const Device = struct {
             if (pipeline.id == 0) continue;
             const indexed = draw.kind == .stencil_nonzero or draw.kind == .stencil_even_odd or draw.kind == .convex;
             sg.applyPipeline(pipeline);
-            sg.applyBindings(if (indexed) indexed_bindings else vertex_bindings);
             sg.applyUniforms(path_vs_params_slot, rangeFromValue(PathVsParams, &params));
             switch (draw.kind) {
                 .cover, .convex, .fringe_stencil, .fringe, .triangles => {
                     const uniform_index: usize = @intCast(draw.uniform_index);
                     if (uniform_index >= frag_params.len) continue;
+                    const texture = self.pathTextureForParams(&frag_params[uniform_index]);
+                    const bindings = if (indexed)
+                        pathIndexedTextureBindings(self.path_vertex_buffer, self.path_index_buffer, 0, 0, texture.view, self.path_texture_sampler)
+                    else
+                        pathVertexTextureBindings(self.path_vertex_buffer, 0, texture.view, self.path_texture_sampler);
+                    sg.applyBindings(bindings);
                     sg.applyUniforms(path_fs_params_slot, rangeFromValue(PathFsParams, &frag_params[uniform_index]));
                 },
-                .stencil_nonzero, .stencil_even_odd => {},
+                .stencil_nonzero, .stencil_even_odd => {
+                    sg.applyBindings(if (indexed) indexed_bindings else vertex_bindings);
+                },
             }
             sg.draw(draw.base_element, draw.element_count, 1);
         }
@@ -366,6 +539,108 @@ pub const Device = struct {
             return;
         }
         sg.applyViewport(0, 0, self.width, self.height, true);
+    }
+
+    fn ensureBlitResources(self: *Device, surface_width: u32, surface_height: u32) void {
+        const missing = self.blit_shader.id == 0 or
+            self.blit_pipeline.id == 0 or
+            self.blit_vertices.id == 0 or
+            self.blit_image.id == 0 or
+            self.blit_sampler.id == 0 or
+            self.blit_view.id == 0;
+        if (!missing and self.blit_width == surface_width and self.blit_height == surface_height) {
+            return;
+        }
+        self.createBlitResources(surface_width, surface_height);
+    }
+
+    fn ensurePathTextureResources(self: *Device, textures: []const PathTexture) void {
+        if (self.path_texture_sampler.id == 0) {
+            self.path_texture_sampler = sg.makeSampler(pathTextureSamplerDesc());
+        }
+        if (self.path_default_image.id == 0 or self.path_default_view.id == 0) {
+            self.createDefaultPathTexture();
+        }
+        self.prunePathTextures(textures);
+        for (textures) |texture| {
+            self.uploadPathTexture(texture);
+        }
+    }
+
+    fn createDefaultPathTexture(self: *Device) void {
+        if (self.path_default_view.id != 0) {
+            sg.destroyView(self.path_default_view);
+            self.path_default_view = .{};
+        }
+        if (self.path_default_image.id != 0) {
+            sg.destroyImage(self.path_default_image);
+            self.path_default_image = .{};
+        }
+        self.path_default_image = sg.makeImage(pathDefaultTextureImageDesc());
+        self.path_default_view = sg.makeView(pathTextureViewDesc(self.path_default_image));
+    }
+
+    fn prunePathTextures(self: *Device, textures: []const PathTexture) void {
+        for (&self.path_textures) |*resource| {
+            if (resource.id == 0) continue;
+            if (findPathTextureInput(textures, resource.id) == null) {
+                self.destroyPathTextureResource(resource);
+            }
+        }
+    }
+
+    fn uploadPathTexture(self: *Device, texture: PathTexture) void {
+        if (texture.id == 0 or texture.format != .rgba8) return;
+        if (texture.width == 0 or texture.height == 0) return;
+        if (texture.pixels.len != @as(usize, texture.width) * @as(usize, texture.height) * 4) return;
+
+        const resource = self.pathTextureResource(texture.id) orelse return;
+        if (resource.image.id == 0 or resource.width != texture.width or resource.height != texture.height) {
+            self.destroyPathTextureResource(resource);
+            resource.id = texture.id;
+            resource.width = texture.width;
+            resource.height = texture.height;
+            resource.image = sg.makeImage(pathTextureImageDesc(texture.width, texture.height));
+            resource.view = sg.makeView(pathTextureViewDesc(resource.image));
+        }
+
+        var image_data: sg.ImageData = .{};
+        image_data.mip_levels[0] = rangeFromSlice(u8, texture.pixels);
+        sg.updateImage(resource.image, image_data);
+    }
+
+    fn pathTextureResource(self: *Device, id: u32) ?*PathTextureResource {
+        for (&self.path_textures) |*resource| {
+            if (resource.id == id) return resource;
+        }
+        for (&self.path_textures) |*resource| {
+            if (resource.id == 0) {
+                resource.id = id;
+                return resource;
+            }
+        }
+        return null;
+    }
+
+    fn destroyPathTextureResource(self: *Device, resource: *PathTextureResource) void {
+        _ = self;
+        if (resource.view.id != 0) {
+            sg.destroyView(resource.view);
+        }
+        if (resource.image.id != 0) {
+            sg.destroyImage(resource.image);
+        }
+        resource.* = .{};
+    }
+
+    fn pathTextureForParams(self: *const Device, params: *const PathFsParams) PathTextureResource {
+        if (params.params[1] > 0.5 and params.params[2] > 0) {
+            const id: u32 = @intFromFloat(params.params[2]);
+            for (self.path_textures) |texture| {
+                if (texture.id == id and texture.view.id != 0) return texture;
+            }
+        }
+        return .{ .view = self.path_default_view };
     }
 
     fn ensurePathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
@@ -418,6 +693,15 @@ pub fn clearPassAction(clear_color: Color) PassAction {
     return action;
 }
 
+pub fn loadPassAction() PassAction {
+    var action: PassAction = .{};
+    action.colors[0].load_action = .LOAD;
+    action.colors[0].store_action = .STORE;
+    action.stencil.load_action = .LOAD;
+    action.stencil.store_action = .STORE;
+    return action;
+}
+
 pub fn stencilCoverPassAction(clear_color: Color) PassAction {
     var action = clearPassAction(clear_color);
     action.stencil.load_action = .CLEAR;
@@ -432,6 +716,111 @@ pub fn passWithAction(action: PassAction) Pass {
 
 pub fn swapchainPassWithAction(action: PassAction, swapchain: Swapchain) Pass {
     return .{ .action = action, .swapchain = swapchain, .label = "okys_swapchain_pass" };
+}
+
+pub fn blitVertexBufferDesc() BufferDesc {
+    return .{
+        .size = 4 * @sizeOf(BlitVertex),
+        .usage = .{ .vertex_buffer = true, .stream_update = true },
+        .label = "okys_blit_vertices",
+    };
+}
+
+pub fn blitImageDesc(width: u32, height: u32) sg.ImageDesc {
+    return .{
+        .type = ._2D,
+        .usage = .{ .stream_update = true },
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .pixel_format = .RGBA8,
+        .label = "okys_sparse_surface",
+    };
+}
+
+pub fn blitSamplerDesc() sg.SamplerDesc {
+    return .{
+        .min_filter = .NEAREST,
+        .mag_filter = .NEAREST,
+        .mipmap_filter = .NEAREST,
+        .wrap_u = .CLAMP_TO_EDGE,
+        .wrap_v = .CLAMP_TO_EDGE,
+        .label = "okys_sparse_surface_sampler",
+    };
+}
+
+pub fn blitTextureViewDesc(image_handle: Image) sg.ViewDesc {
+    return .{
+        .texture = .{ .image = image_handle },
+        .label = "okys_sparse_surface_view",
+    };
+}
+
+pub fn pathTextureImageDesc(width: u32, height: u32) sg.ImageDesc {
+    return .{
+        .type = ._2D,
+        .usage = .{ .stream_update = true },
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .pixel_format = .RGBA8,
+        .label = "okys_path_texture",
+    };
+}
+
+pub fn pathDefaultTextureImageDesc() sg.ImageDesc {
+    return .{
+        .type = ._2D,
+        .usage = .{ .immutable = true },
+        .width = 1,
+        .height = 1,
+        .pixel_format = .RGBA8,
+        .data = .{ .mip_levels = pathDefaultTextureData() },
+        .label = "okys_path_default_texture",
+    };
+}
+
+pub fn pathDefaultTextureData() [16]sg.Range {
+    var mip_levels: [16]sg.Range = @splat(.{});
+    mip_levels[0] = rangeFromSlice(u8, path_default_texture_pixels[0..]);
+    return mip_levels;
+}
+
+pub fn pathTextureSamplerDesc() sg.SamplerDesc {
+    return .{
+        .min_filter = .LINEAR,
+        .mag_filter = .LINEAR,
+        .mipmap_filter = .NEAREST,
+        .wrap_u = .REPEAT,
+        .wrap_v = .REPEAT,
+        .label = "okys_path_texture_sampler",
+    };
+}
+
+pub fn pathTextureViewDesc(image_handle: Image) sg.ViewDesc {
+    return .{
+        .texture = .{ .image = image_handle },
+        .label = "okys_path_texture_view",
+    };
+}
+
+pub fn blitPipelineDesc(shader: Shader) PipelineDesc {
+    var desc: PipelineDesc = .{};
+    desc.shader = shader;
+    desc.layout.buffers[0].stride = @sizeOf(BlitVertex);
+    desc.layout.attrs[blit_position_attr].offset = @offsetOf(BlitVertex, "x");
+    desc.layout.attrs[blit_position_attr].format = .FLOAT2;
+    desc.layout.attrs[blit_uv_attr].offset = @offsetOf(BlitVertex, "u");
+    desc.layout.attrs[blit_uv_attr].format = .FLOAT2;
+    desc.primitive_type = .TRIANGLE_STRIP;
+    desc.label = "okys_blit_pipeline";
+    return desc;
+}
+
+pub fn blitBindings(vertex_buffer: Buffer, view: View, sampler: Sampler) Bindings {
+    var bindings: Bindings = .{};
+    bindings.vertex_buffers[0] = vertex_buffer;
+    bindings.views[blit_view_slot] = view;
+    bindings.samplers[blit_sampler_slot] = sampler;
+    return bindings;
 }
 
 pub fn smokeVertexBufferDesc(triangle: *const SmokeTriangle) BufferDesc {
@@ -492,6 +881,29 @@ pub fn pathIndexedBindings(vertex_buffer: Buffer, index_buffer: Buffer, vertex_o
     bindings.index_buffer = index_buffer;
     bindings.index_buffer_offset = index_offset_bytes;
     return bindings;
+}
+
+pub fn pathVertexTextureBindings(vertex_buffer: Buffer, vertex_offset_bytes: i32, view: View, sampler: Sampler) Bindings {
+    var bindings = pathVertexBindings(vertex_buffer, vertex_offset_bytes);
+    bindings.views[path_image_view_slot] = view;
+    bindings.samplers[path_image_sampler_slot] = sampler;
+    return bindings;
+}
+
+pub fn pathIndexedTextureBindings(vertex_buffer: Buffer, index_buffer: Buffer, vertex_offset_bytes: i32, index_offset_bytes: i32, view: View, sampler: Sampler) Bindings {
+    var bindings = pathVertexTextureBindings(vertex_buffer, vertex_offset_bytes, view, sampler);
+    bindings.index_buffer = index_buffer;
+    bindings.index_buffer_offset = index_offset_bytes;
+    return bindings;
+}
+
+pub fn blitVsParams(view_width: f32, view_height: f32) BlitVsParams {
+    return .{
+        .view_size = .{
+            if (view_width > 0) view_width else 1,
+            if (view_height > 0) view_height else 1,
+        },
+    };
 }
 
 pub fn pathVsParams(view_width: f32, view_height: f32) PathVsParams {
@@ -559,6 +971,26 @@ pub fn pathPipelineDesc(shader: Shader, kind: PathPipelineKind) PipelineDesc {
     }
 
     return desc;
+}
+
+fn blitQuad(dest: BlitRect) [4]BlitVertex {
+    const x0 = dest.x;
+    const y0 = dest.y;
+    const x1 = dest.x + dest.width;
+    const y1 = dest.y + dest.height;
+    return .{
+        .{ .x = x0, .y = y0, .u = 0.0, .v = 0.0 },
+        .{ .x = x1, .y = y0, .u = 1.0, .v = 0.0 },
+        .{ .x = x0, .y = y1, .u = 0.0, .v = 1.0 },
+        .{ .x = x1, .y = y1, .u = 1.0, .v = 1.0 },
+    };
+}
+
+fn findPathTextureInput(textures: []const PathTexture, id: u32) ?*const PathTexture {
+    for (textures) |*texture| {
+        if (texture.id == id) return texture;
+    }
+    return null;
 }
 
 fn pixelExtent(points: f32, dpr: f32) i32 {

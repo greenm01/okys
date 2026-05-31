@@ -42,6 +42,25 @@ pub const StencilDraw = sokol_device.StencilDraw;
 pub const CoverDraw = sokol_device.CoverDraw;
 pub const PathFsParams = sokol_device.PathFsParams;
 
+const StencilTexture = struct {
+    texture: Texture,
+    pixels: std.ArrayList(u8) = .empty,
+
+    fn deinit(self: *StencilTexture, gpa: std.mem.Allocator) void {
+        self.pixels.deinit(gpa);
+    }
+
+    fn view(self: *const StencilTexture) sokol_device.PathTexture {
+        return .{
+            .id = @intFromEnum(self.texture.id),
+            .width = self.texture.width,
+            .height = self.texture.height,
+            .format = self.texture.format,
+            .pixels = self.pixels.items,
+        };
+    }
+};
+
 pub const Backend = struct {
     gpa: std.mem.Allocator,
     calls: std.ArrayList(Call) = .empty,
@@ -54,7 +73,8 @@ pub const Backend = struct {
     stencil_draws: std.ArrayList(StencilDraw) = .empty,
     cover_draws: std.ArrayList(CoverDraw) = .empty,
     frag_params: std.ArrayList(PathFsParams) = .empty,
-    textures: std.AutoArrayHashMapUnmanaged(ImageId, Texture) = .empty,
+    textures: std.AutoArrayHashMapUnmanaged(ImageId, StencilTexture) = .empty,
+    texture_views: std.ArrayList(sokol_device.PathTexture) = .empty,
 
     viewport_width: f32 = 0,
     viewport_height: f32 = 0,
@@ -90,7 +110,11 @@ pub const Backend = struct {
         self.stencil_draws.deinit(gpa);
         self.cover_draws.deinit(gpa);
         self.frag_params.deinit(gpa);
+        for (self.textures.values()) |*texture| {
+            texture.deinit(gpa);
+        }
         self.textures.deinit(gpa);
+        self.texture_views.deinit(gpa);
         gpa.destroy(self);
     }
 
@@ -118,12 +142,14 @@ pub const Backend = struct {
 
     pub fn submitToDevice(self: *Backend, device: *Device, pass: Pass) bool {
         if (!self.buildStencilPass()) return false;
-        device.drawPathPass(
+        self.rebuildTextureViews() catch return false;
+        device.drawPathPassWithTextures(
             pass,
             self.vertices.items,
             self.indices.items,
             self.path_draws.items,
             self.frag_params.items,
+            self.texture_views.items,
             self.viewport_width,
             self.viewport_height,
         );
@@ -168,6 +194,14 @@ pub const Backend = struct {
             &self.frag_params,
         ) catch return false;
         return true;
+    }
+
+    fn rebuildTextureViews(self: *Backend) !void {
+        self.texture_views.clearRetainingCapacity();
+        try self.texture_views.ensureTotalCapacity(self.gpa, self.textures.count());
+        for (self.textures.values()) |*texture| {
+            self.texture_views.appendAssumeCapacity(texture.view());
+        }
     }
 
     fn queueFill(self: *Backend, paint: *const Paint, scissor: *const Scissor, bounds: [4]f32, input_paths: []const PathRange, points: []const Point) void {
@@ -396,34 +430,68 @@ fn from(ctx: *anyopaque) *Backend {
 }
 
 fn createTexture(ctx: *anyopaque, id: ImageId, w: u32, h: u32, fmt: TexFormat, data: ?[]const u8) bool {
-    _ = data;
     const self = from(ctx);
-    self.textures.put(self.gpa, id, .{
-        .id = id,
-        .width = w,
-        .height = h,
-        .format = fmt,
-    }) catch return false;
+    var texture: StencilTexture = .{
+        .texture = .{
+            .id = id,
+            .width = w,
+            .height = h,
+            .format = fmt,
+        },
+    };
+    const len = byteLen(w, h, fmt) orelse return false;
+    if (data) |bytes| {
+        if (bytes.len != len) return false;
+        texture.pixels.appendSlice(self.gpa, bytes) catch return false;
+    } else {
+        texture.pixels.resize(self.gpa, len) catch return false;
+        @memset(texture.pixels.items, 0);
+    }
+    errdefer texture.deinit(self.gpa);
+    self.textures.put(self.gpa, id, texture) catch return false;
     return true;
 }
 
 fn updateTexture(ctx: *anyopaque, id: ImageId, x: u32, y: u32, w: u32, h: u32, data: []const u8) void {
-    _ = ctx;
-    _ = id;
-    _ = x;
-    _ = y;
-    _ = w;
-    _ = h;
-    _ = data;
+    const self = from(ctx);
+    const texture = self.textures.getPtr(id) orelse return;
+    const bpp = bytesPerPixel(texture.texture.format) orelse return;
+    if (w == 0 or h == 0) return;
+    if (x + w > texture.texture.width or y + h > texture.texture.height) return;
+    const row_bytes: usize = @as(usize, w) * bpp;
+    if (data.len != row_bytes * @as(usize, h)) return;
+
+    var row: u32 = 0;
+    while (row < h) : (row += 1) {
+        const src = @as(usize, row) * row_bytes;
+        const dst = (@as(usize, y + row) * @as(usize, texture.texture.width) + x) * bpp;
+        @memcpy(texture.pixels.items[dst..][0..row_bytes], data[src..][0..row_bytes]);
+    }
 }
 
 fn deleteTexture(ctx: *anyopaque, id: ImageId) void {
-    _ = from(ctx).textures.swapRemove(id);
+    const self = from(ctx);
+    if (self.textures.fetchSwapRemove(id)) |entry| {
+        var texture = entry.value;
+        texture.deinit(self.gpa);
+    }
 }
 
 fn textureSize(ctx: *anyopaque, id: ImageId) ?[2]u32 {
     const texture = from(ctx).textures.get(id) orelse return null;
-    return .{ texture.width, texture.height };
+    return .{ texture.texture.width, texture.texture.height };
+}
+
+fn byteLen(w: u32, h: u32, fmt: TexFormat) ?usize {
+    const bpp = bytesPerPixel(fmt) orelse return null;
+    return @as(usize, w) * @as(usize, h) * bpp;
+}
+
+fn bytesPerPixel(fmt: TexFormat) ?usize {
+    return switch (fmt) {
+        .rgba8 => 4,
+        .a8 => 1,
+    };
 }
 
 fn viewport(ctx: *anyopaque, width: f32, height: f32, dpr: f32) void {

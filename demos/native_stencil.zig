@@ -8,7 +8,8 @@ const glue = sokol.glue;
 const color = okys.types.color;
 const ImageId = okys.types.image.ImageId;
 const Context = okys.state.context.Context;
-const Backend = okys.systems.backend_stencil.Backend;
+const SparseBackend = okys.systems.backend_sparse_strip.Backend;
+const StencilBackend = okys.systems.backend_stencil.Backend;
 const frame_ops = okys.ops.frame;
 const image_ops = okys.ops.image;
 const paint_ops = okys.ops.paint;
@@ -19,11 +20,16 @@ const sokol_device = okys.render.sokol_device;
 
 const OKY_ANTIALIAS: u32 = 1 << 0;
 const OKY_STENCIL_STROKES: u32 = 1 << 1;
+const scene_width: f32 = 960;
+const scene_height: f32 = 640;
 
 var device: sokol_device.Device = .{};
-var ctx: ?*Context = null;
-var backend: ?*Backend = null;
-var checker_image: ImageId = .none;
+var stencil_ctx: ?*Context = null;
+var stencil_backend: ?*StencilBackend = null;
+var stencil_checker_image: ImageId = .none;
+var sparse_ctx: ?*Context = null;
+var sparse_backend: ?*SparseBackend = null;
+var sparse_checker_image: ImageId = .none;
 
 pub fn main() void {
     app.run(.{
@@ -31,57 +37,105 @@ pub fn main() void {
         .frame_cb = frame,
         .cleanup_cb = cleanup,
         .width = 960,
-        .height = 640,
+        .height = 1280,
         .high_dpi = true,
-        .window_title = "Okys stencil-cover demo",
+        .window_title = "Okys renderer comparison: top stencil-cover, bottom sparse-strip",
     });
 }
 
 fn init() callconv(.c) void {
     device = sokol_device.Device.initOwned(.{ .environment = glue.environment() });
 
-    const c = Context.create(std.heap.c_allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES) catch {
+    const stencil_c = Context.create(std.heap.c_allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES) catch {
         app.requestQuit();
         return;
     };
-    const b = Backend.createWithFlags(std.heap.c_allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES) catch {
-        c.destroy();
+    const stencil_b = StencilBackend.createWithFlags(std.heap.c_allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES) catch {
+        stencil_c.destroy();
         app.requestQuit();
         return;
     };
-    b.fill_rule = .even_odd;
-    c.installBackend(b.interface());
+    stencil_b.fill_rule = .even_odd;
+    stencil_c.installBackend(stencil_b.interface());
 
-    ctx = c;
-    backend = b;
-    checker_image = createCheckerImage(c);
+    const sparse_c = Context.create(std.heap.c_allocator, OKY_ANTIALIAS | OKY_STENCIL_STROKES) catch {
+        stencil_c.destroy();
+        app.requestQuit();
+        return;
+    };
+    const sparse_b = SparseBackend.create(std.heap.c_allocator) catch {
+        sparse_c.destroy();
+        stencil_c.destroy();
+        app.requestQuit();
+        return;
+    };
+    sparse_b.fill_rule = .even_odd;
+    sparse_c.installBackend(sparse_b.interface());
+
+    stencil_ctx = stencil_c;
+    stencil_backend = stencil_b;
+    stencil_checker_image = createCheckerImage(stencil_c);
+    sparse_ctx = sparse_c;
+    sparse_backend = sparse_b;
+    sparse_checker_image = createCheckerImage(sparse_c);
 }
 
 fn frame() callconv(.c) void {
-    const c = ctx orelse return;
-    const b = backend orelse return;
+    const top_c = stencil_ctx orelse return;
+    const top_b = stencil_backend orelse return;
+    const bottom_c = sparse_ctx orelse return;
+    const bottom_b = sparse_backend orelse return;
     const width = app.widthf();
     const height = app.heightf();
     const dpr = app.dpiScale();
 
     device.resize(width, height, dpr);
-    frame_ops.beginFrame(c, width, height, dpr);
-    drawScene(c, checker_image);
+    frame_ops.beginFrame(top_c, width, height, dpr);
+    drawScene(top_c, stencil_checker_image);
 
-    const pass = sokol_device.swapchainPassWithAction(
+    const stencil_pass = sokol_device.swapchainPassWithAction(
         sokol_device.stencilCoverPassAction(.{ .r = 0.08, .g = 0.09, .b = 0.10, .a = 1.0 }),
         glue.swapchain(),
     );
-    _ = b.submitToDevice(&device, pass);
-    b.clearQueued();
+    _ = top_b.submitToDevice(&device, stencil_pass);
+
+    frame_ops.beginFrame(bottom_c, scene_width, scene_height, dpr);
+    drawScene(bottom_c, sparse_checker_image);
+    if (bottom_b.build()) {
+        const blit_pass = sokol_device.swapchainPassWithAction(sokol_device.loadPassAction(), glue.swapchain());
+        device.drawRgbaSurface(
+            blit_pass,
+            bottom_b.surface.items,
+            @intFromFloat(scene_width),
+            @intFromFloat(scene_height),
+            .{
+                .x = 0,
+                .y = scene_height,
+                .width = scene_width,
+                .height = scene_height,
+            },
+            width,
+            height,
+        );
+    }
+
+    top_b.clearQueued();
+    bottom_b.clearQueued();
     sokol_device.Device.commit();
 }
 
 fn cleanup() callconv(.c) void {
-    if (ctx) |c| {
+    if (stencil_ctx) |c| {
         c.destroy();
-        ctx = null;
-        backend = null;
+        stencil_ctx = null;
+        stencil_backend = null;
+        stencil_checker_image = .none;
+    }
+    if (sparse_ctx) |c| {
+        c.destroy();
+        sparse_ctx = null;
+        sparse_backend = null;
+        sparse_checker_image = .none;
     }
     device.deinit();
 }
@@ -97,7 +151,7 @@ fn createCheckerImage(c: *Context) ImageId {
 fn drawScene(c: *Context, image_id: ImageId) void {
     paint_ops.fillColor(c, color.rgbaf(0.14, 0.15, 0.16, 1.0));
     path_ops.beginPath(c);
-    path_ops.rect(c, 0, 0, c.width, c.height);
+    path_ops.rect(c, 0, 0, scene_width, scene_height);
     render_ops.fill(c);
 
     paint_ops.fillColor(c, color.rgbaf(0.20, 0.58, 0.86, 1.0));
@@ -175,4 +229,9 @@ fn drawScene(c: *Context, image_id: ImageId) void {
     path_ops.moveTo(c, 58, 418);
     path_ops.lineTo(c, 900, 422);
     render_ops.stroke(c);
+
+    paint_ops.fillColor(c, color.rgbaf(0.22, 0.24, 0.25, 1.0));
+    path_ops.beginPath(c);
+    path_ops.rect(c, 0, scene_height - 2, scene_width, 2);
+    render_ops.fill(c);
 }

@@ -252,6 +252,33 @@ test "sparse image pattern samples uploaded rgba texture" {
     try testing.expectEqual([4]u8{ 0, 0, 255, 255 }, rgbaAt(backend, 0, 1));
 }
 
+test "sparse image pattern filters between texels" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+    const backend = try Backend.create(testing.allocator);
+    ctx.installBackend(backend.interface());
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 8, 4, 1);
+
+    const pixels = [_]u8{
+        255, 0, 0, 255, 0, 255, 0, 255,
+    };
+    const id = image_ops.createImageRGBA(ctx, 2, 1, &pixels);
+    try testing.expect(id != .none);
+
+    const paint = paint_ops.imagePattern(ctx, 0, 0, 4, 1, 0, @intCast(@intFromEnum(id)), 1);
+    queuePaintRect(&iface, paint, 0, 0, 4, 1, disabled_scissor);
+    try testing.expect(backend.build());
+
+    const left_blend = rgbaAt(backend, 1, 0);
+    try testing.expect(left_blend[0] > left_blend[1]);
+    try testing.expect(left_blend[1] > 0);
+
+    const right_blend = rgbaAt(backend, 2, 0);
+    try testing.expect(right_blend[1] > right_blend[0]);
+    try testing.expect(right_blend[0] > 0);
+}
+
 test "sparse image update changes later proof output" {
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
