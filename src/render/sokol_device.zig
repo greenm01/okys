@@ -1547,7 +1547,7 @@ fn elapsedSince(start: u64) u64 {
 pub fn pathTextureImageDesc(width: u32, height: u32) sg.ImageDesc {
     return .{
         .type = ._2D,
-        .usage = .{ .stream_update = true },
+        .usage = .{ .dynamic_update = true },
         .width = @intCast(width),
         .height = @intCast(height),
         .pixel_format = .RGBA8,

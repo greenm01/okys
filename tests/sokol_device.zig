@@ -123,7 +123,7 @@ test "path texture descriptors and bindings use generated slots" {
     const image_desc = sokol_device.pathTextureImageDesc(16, 8);
     try testing.expectEqual(@as(i32, 16), image_desc.width);
     try testing.expectEqual(@as(i32, 8), image_desc.height);
-    try testing.expect(image_desc.usage.stream_update);
+    try testing.expect(image_desc.usage.dynamic_update);
     try testing.expectEqual(@as(@TypeOf(image_desc.pixel_format), .RGBA8), image_desc.pixel_format);
 
     const sampler_desc = sokol_device.pathTextureSamplerDesc();
