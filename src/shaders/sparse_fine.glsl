@@ -37,14 +37,14 @@ struct GpuClipIndex {
 };
 
 struct Segment {
-    float x0;
-    float y0;
-    float x1;
-    float y1;
-    uint call_index;
-    uint path_index;
-    int winding;
-    uint flags;
+    float slope;
+    float intercept;
+    float min_y;
+    float max_y;
+    float sign;
+    float _pad0;
+    uint _pad1;
+    uint _pad2;
 };
 
 struct GpuFineTask {
@@ -114,29 +114,26 @@ float integrate_clamped_linear(float slope, float intercept, float y0, float y1)
 }
 
 float segment_area(float px, float py, Segment seg) {
-    float dy = seg.y1 - seg.y0;
-    if (dy == 0.0) {
+    if (seg.sign == 0.0) {
         return 0.0;
     }
 
-    float y0 = max(min(seg.y0, seg.y1), py);
-    float y1 = min(max(seg.y0, seg.y1), py + 1.0);
+    float y0 = max(seg.min_y, py);
+    float y1 = min(seg.max_y, py + 1.0);
     if (y0 >= y1) {
         return 0.0;
     }
 
-    float slope = (seg.x1 - seg.x0) / dy;
-    float intercept = seg.x0 - slope * seg.y0 - px;
-    float sign = dy > 0.0 ? 1.0 : -1.0;
-    float x0 = slope * y0 + intercept;
-    float x1 = slope * y1 + intercept;
+    float intercept = seg.intercept - px;
+    float x0 = seg.slope * y0 + intercept;
+    float x1 = seg.slope * y1 + intercept;
     if (x0 <= 0.0 && x1 <= 0.0) {
         return 0.0;
     }
     if (x0 >= 1.0 && x1 >= 1.0) {
-        return sign * (y1 - y0);
+        return seg.sign * (y1 - y0);
     }
-    return sign * integrate_clamped_linear(slope, intercept, y0, y1);
+    return seg.sign * integrate_clamped_linear(seg.slope, intercept, y0, y1);
 }
 
 float area_to_alpha(uint fill_rule, float area) {

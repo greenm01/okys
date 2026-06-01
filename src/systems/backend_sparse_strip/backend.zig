@@ -416,7 +416,7 @@ pub const Backend = struct {
         const calls_bytes = bytesOf(gpu_fine.GpuCall, packet.calls.items.len);
         const clips_bytes = bytesOf(gpu_fine.GpuClip, packet.clips.items.len);
         const clip_indices_bytes = bytesOf(gpu_fine.GpuClipIndex, packet.clip_indices.items.len);
-        const segments_bytes = bytesOf(Segment, self.segments.items.len);
+        const segments_bytes = bytesOf(gpu_fine.GpuSegment, packet.segments.items.len);
         const tasks_bytes = bytesOf(gpu_fine.GpuFineTask, packet.tasks.items.len);
         const segment_indices_bytes = bytesOf(gpu_fine.GpuSegmentIndex, packet.segment_indices.items.len);
         return .{

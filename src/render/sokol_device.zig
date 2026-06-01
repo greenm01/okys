@@ -492,6 +492,7 @@ pub const Device = struct {
         view_height: f32,
         timing: *SparseFineSubmitTiming,
     ) bool {
+        _ = segments;
         const total_start = nowNs();
         timing.* = .{
             .calls = packet.calls.items.len,
@@ -522,7 +523,7 @@ pub const Device = struct {
             return false;
         }
 
-        self.ensureSparseFineResources(surface_width, surface_height, packet, segments);
+        self.ensureSparseFineResources(surface_width, surface_height, packet);
         timing.resource_ns = elapsedSince(resource_start);
         if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) {
             timing.fallback = .missing_resources;
@@ -543,7 +544,7 @@ pub const Device = struct {
         uploadStorageBuffer(gpu_fine.GpuClipIndex, self.sparse_clip_index_buffer.buffer, packet.clip_indices.items);
         uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
         uploadStorageBuffer(gpu_fine.GpuSegmentIndex, self.sparse_segment_index_buffer.buffer, packet.segment_indices.items);
-        uploadStorageBuffer(sparse_encode.Segment, self.sparse_segment_buffer.buffer, segments);
+        uploadStorageBuffer(gpu_fine.GpuSegment, self.sparse_segment_buffer.buffer, packet.segments.items);
         timing.upload_ns = elapsedSince(upload_start);
 
         const compute_start = nowNs();
@@ -1106,7 +1107,6 @@ pub const Device = struct {
         surface_width: u32,
         surface_height: u32,
         packet: *const gpu_fine.Packet,
-        segments: []const sparse_encode.Segment,
     ) void {
         if (self.sparse_clear_shader.id == 0) {
             self.sparse_clear_shader = sg.makeShader(sparse_fine_shader.sparseClearShaderDesc(sg.queryBackend()));
@@ -1122,7 +1122,7 @@ pub const Device = struct {
         }
 
         self.ensureStorageBuffer(&self.sparse_call_buffer, bytesFor(gpu_fine.GpuCall, packet.calls.items.len), "okys_sparse_calls");
-        self.ensureStorageBuffer(&self.sparse_segment_buffer, bytesFor(sparse_encode.Segment, segments.len), "okys_sparse_segments");
+        self.ensureStorageBuffer(&self.sparse_segment_buffer, bytesFor(gpu_fine.GpuSegment, packet.segments.items.len), "okys_sparse_segments");
         self.ensureStorageBuffer(&self.sparse_clip_buffer, bytesFor(gpu_fine.GpuClip, packet.clips.items.len), "okys_sparse_clips");
         self.ensureStorageBuffer(&self.sparse_clip_index_buffer, bytesFor(gpu_fine.GpuClipIndex, packet.clip_indices.items.len), "okys_sparse_clip_indices");
         self.ensureStorageBuffer(&self.sparse_task_buffer, bytesFor(gpu_fine.GpuFineTask, packet.tasks.items.len), "okys_sparse_fine_tasks");
@@ -1829,7 +1829,7 @@ comptime {
     std.debug.assert(@sizeOf(gpu_fine.GpuClipIndex) == @sizeOf(sparse_fine_shader.Gpuclipindex));
     std.debug.assert(@sizeOf(gpu_fine.GpuFineTask) == @sizeOf(sparse_fine_shader.Gpufinetask));
     std.debug.assert(@sizeOf(gpu_fine.GpuSegmentIndex) == @sizeOf(sparse_fine_shader.Gpusegmentindex));
-    std.debug.assert(@sizeOf(sparse_encode.Segment) == @sizeOf(sparse_fine_shader.Segment));
+    std.debug.assert(@sizeOf(gpu_fine.GpuSegment) == @sizeOf(sparse_fine_shader.Segment));
 }
 
 fn findPathTextureInput(textures: []const PathTexture, id: u32) ?*const PathTexture {

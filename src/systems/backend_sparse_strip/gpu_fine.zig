@@ -76,6 +76,17 @@ pub const GpuClipIndex = extern struct {
     value: u32 = 0,
 };
 
+pub const GpuSegment = extern struct {
+    slope: f32 = 0,
+    intercept: f32 = 0,
+    min_y: f32 = 0,
+    max_y: f32 = 0,
+    sign: f32 = 0,
+    _pad0: f32 = 0,
+    _pad1: u32 = 0,
+    _pad2: u32 = 0,
+};
+
 pub const GpuFineTask = extern struct {
     xy: u32 = 0,
     call_index: u32 = 0,
@@ -129,6 +140,7 @@ pub const Packet = struct {
     calls: std.ArrayList(GpuCall) = .empty,
     clips: std.ArrayList(GpuClip) = .empty,
     clip_indices: std.ArrayList(GpuClipIndex) = .empty,
+    segments: std.ArrayList(GpuSegment) = .empty,
     tasks: std.ArrayList(GpuFineTask) = .empty,
     segment_indices: std.ArrayList(GpuSegmentIndex) = .empty,
     scratch: Scratch = .{},
@@ -138,6 +150,7 @@ pub const Packet = struct {
         self.calls.deinit(gpa);
         self.clips.deinit(gpa);
         self.clip_indices.deinit(gpa);
+        self.segments.deinit(gpa);
         self.tasks.deinit(gpa);
         self.segment_indices.deinit(gpa);
         self.scratch.deinit(gpa);
@@ -147,6 +160,7 @@ pub const Packet = struct {
         self.calls.clearRetainingCapacity();
         self.clips.clearRetainingCapacity();
         self.clip_indices.clearRetainingCapacity();
+        self.segments.clearRetainingCapacity();
         self.tasks.clearRetainingCapacity();
         self.segment_indices.clearRetainingCapacity();
         self.scratch.clearBoundaryMask();
@@ -211,6 +225,7 @@ pub fn build(
     try packet.calls.ensureTotalCapacity(gpa, calls.len);
     try packet.clips.ensureTotalCapacity(gpa, clips.len);
     try packet.clip_indices.ensureTotalCapacity(gpa, call_clip_indices.len);
+    try packet.segments.ensureTotalCapacity(gpa, segments.len);
     _ = strip_segment_indices;
 
     const pack_start = profileStart(profile);
@@ -219,6 +234,9 @@ pub fn build(
     }
     for (call_clip_indices) |clip_index| {
         packet.clip_indices.appendAssumeCapacity(.{ .value = clip_index });
+    }
+    for (segments) |seg| {
+        packet.segments.appendAssumeCapacity(packSegment(seg));
     }
     for (calls) |call| {
         packet.calls.appendAssumeCapacity(packCall(fill_rule, call, segments));
@@ -304,9 +322,9 @@ pub fn build(
         @sizeOf(GpuCall) * packet.calls.items.len +
         @sizeOf(GpuClip) * packet.clips.items.len +
         @sizeOf(GpuClipIndex) * packet.clip_indices.items.len +
+        @sizeOf(GpuSegment) * packet.segments.items.len +
         @sizeOf(GpuFineTask) * packet.tasks.items.len +
-        @sizeOf(GpuSegmentIndex) * packet.segment_indices.items.len +
-        @sizeOf(encode.Segment) * segments.len;
+        @sizeOf(GpuSegmentIndex) * packet.segment_indices.items.len;
     packet.scratch.clearBoundaryMask();
     return true;
 }
@@ -646,6 +664,26 @@ fn packClip(clip: encode.ClipRecord) GpuClip {
     };
 }
 
+fn packSegment(seg: encode.Segment) GpuSegment {
+    const min_y = @min(seg.y0, seg.y1);
+    const max_y = @max(seg.y0, seg.y1);
+    const dy = seg.y1 - seg.y0;
+    if (dy == 0) {
+        return .{
+            .min_y = min_y,
+            .max_y = max_y,
+        };
+    }
+    const slope = (seg.x1 - seg.x0) / dy;
+    return .{
+        .slope = slope,
+        .intercept = seg.x0 - slope * seg.y0,
+        .min_y = min_y,
+        .max_y = max_y,
+        .sign = if (dy > 0) 1 else -1,
+    };
+}
+
 pub fn fillRuleForCall(default_rule: strip.FillRule, kind: strip.CallKind) strip.FillRule {
     return switch (kind) {
         .fill => default_rule,
@@ -836,6 +874,9 @@ comptime {
     std.debug.assert(@offsetOf(GpuClip, "bounds") == 0);
     std.debug.assert(@offsetOf(GpuClip, "segment_start") == 16);
     std.debug.assert(@sizeOf(GpuClipIndex) == 4);
+    std.debug.assert(@sizeOf(GpuSegment) == 32);
+    std.debug.assert(@offsetOf(GpuSegment, "slope") == 0);
+    std.debug.assert(@offsetOf(GpuSegment, "sign") == 16);
     std.debug.assert(@sizeOf(GpuSegmentIndex) == 4);
     std.debug.assert(@sizeOf(GpuFineTask) == 16);
     std.debug.assert(@offsetOf(GpuFineTask, "xy") == 0);
