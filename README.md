@@ -23,9 +23,10 @@ header is hand-written and is the source of truth for the ABI.
 
 Desktop is the target. Downstream libraries should consume Okys through the C
 ABI rather than binding WebGPU themselves. The current WebGPU bridge accepts a
-host-provided `WGPUDevice` and current texture view; the first-release integration
-goal is an Okys-owned platform host layer so Koi/Gridmonger do not need a
-separate WebGPU package.
+host-provided `WGPUDevice` and current texture view. The first Okys-owned
+platform host slice accepts Linux Wayland handles and creates the Vulkan
+device/swapchain behind `okys.h`, so Koi/Gridmonger do not need a separate
+WebGPU package for that path.
 
 Native Vulkan remains available for the current Linux host path, diagnostics,
 and benchmarks. GL remains useful for local smoke/golden fixtures.
@@ -45,10 +46,11 @@ Artifacts: `zig-out/lib/libokys.a` and `zig-out/include/okys.h`.
 ## Status
 
 The C ABI, NanoVG-style front-end, stencil-cover fallback, sparse-strip CPU proof,
-and sparse GPU fine path are in place. Native hosts must install a graphics
-runtime after creating their device or context. GL callers use `okySetupGL`;
-WebGPU callers use `okySetupWebGPU` plus `okySetWebGPURenderTarget` each frame.
-See `examples/c_glfw_minimal.c` for the GL call order.
+and sparse GPU fine path are in place. Caller-owned graphics contexts use
+`okySetupGraphics` or the GL/WebGPU/Vulkan convenience wrappers. Linux Wayland
+consumers can use `okyPlatformHostCreateWayland` plus the platform-frame API to
+let Okys own device/swapchain setup. See `examples/c_glfw_minimal.c` for the GL
+call order.
 
 ## License
 

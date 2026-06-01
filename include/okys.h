@@ -189,6 +189,20 @@ typedef struct OKYreadPixelsDesc {
     unsigned char *dst;
 } OKYreadPixelsDesc;
 
+typedef struct OKYplatformHost OKYplatformHost;
+
+typedef struct OKYplatformFrame {
+    const void *render_image;
+    const void *render_view;
+    const void *depth_stencil_image;
+    const void *depth_stencil_view;
+    const void *render_finished_semaphore;
+    const void *present_complete_semaphore;
+    uint32_t width;
+    uint32_t height;
+    uint32_t image_index;
+} OKYplatformFrame;
+
 /* --- version / abi ----------------------------------------------------- */
 unsigned int okyAbiVersion(void);
 const char *okyVersionString(void);
@@ -203,10 +217,26 @@ void okyBeginFrame(OKYcontext *ctx, float window_width, float window_height,
 void okyEndFrame(OKYcontext *ctx);
 void okyCancelFrame(OKYcontext *ctx);
 
-/* --- WebGPU bridge ----------------------------------------------------- */
+/* --- graphics / platform bridge --------------------------------------- */
 int okySetupGraphics(OKYcontext *ctx, const OKYgraphicsDesc *desc);
 int okySetRenderTarget(OKYcontext *ctx, const OKYrenderTarget *target);
 int okyReadPixels(OKYcontext *ctx, const OKYreadPixelsDesc *desc);
+OKYplatformHost *okyPlatformHostCreateWayland(void *wl_display,
+                                              void *wl_surface,
+                                              uint32_t width,
+                                              uint32_t height);
+void okyPlatformHostDestroy(OKYplatformHost *host);
+int okyPlatformHostResize(OKYplatformHost *host, uint32_t width,
+                          uint32_t height);
+int okyPlatformHostBeginFrame(OKYplatformHost *host, OKYplatformFrame *frame);
+int okyPlatformHostPresent(OKYplatformHost *host,
+                           const OKYplatformFrame *frame);
+const void *okyPlatformHostVulkanInstance(OKYplatformHost *host);
+const void *okyPlatformHostVulkanPhysicalDevice(OKYplatformHost *host);
+const void *okyPlatformHostVulkanDevice(OKYplatformHost *host);
+const void *okyPlatformHostVulkanQueue(OKYplatformHost *host);
+uint32_t okyPlatformHostVulkanQueueFamilyIndex(OKYplatformHost *host);
+int okyPlatformHostColorFormatCode(OKYplatformHost *host);
 int okySetupGL(OKYcontext *ctx, int sample_count);
 int okySetupVulkan(OKYcontext *ctx, const void *vulkan_instance,
                    const void *vulkan_physical_device,

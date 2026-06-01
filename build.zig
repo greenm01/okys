@@ -285,6 +285,12 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
     lib_mod.addIncludePath(b.path("include"));
+    if (backend == .vulkan) {
+        lib_mod.addCSourceFile(.{
+            .file = b.path("src/platform_host_vulkan.c"),
+            .flags = &.{"-std=c11"},
+        });
+    }
     lib_mod.addImport("sokol", mod_sokol);
     lib_mod.addImport("okys_shader", mod_okys_shader);
     lib_mod.addImport("okys_path_shader", mod_okys_path_shader);

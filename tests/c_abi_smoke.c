@@ -20,6 +20,10 @@ int main(void) {
     OKYcontext *sparse_ctx = okyCreate(OKY_SPARSE_STRIP);
     assert(sparse_ctx != NULL);
     OKYgraphicsDesc graphics_desc = {0};
+    OKYplatformHost *platform_host = NULL;
+    OKYplatformFrame platform_frame = {0};
+    (void)platform_host;
+    assert(platform_frame.width == 0);
     graphics_desc.backend = OKY_GRAPHICS_BACKEND_GL;
     graphics_desc.color_format = OKY_PIXEL_FORMAT_RGBA8;
     graphics_desc.depth_format = OKY_PIXEL_FORMAT_DEPTH_STENCIL;
