@@ -4,6 +4,9 @@ const std = @import("std");
 const encode = @import("encode.zig");
 const strip = @import("strip.zig");
 
+const max_bucket_sort_tiles: usize = 1_000_000;
+const min_bucket_sort_tiles: usize = 65_536;
+
 pub fn build(
     gpa: std.mem.Allocator,
     viewport_width: f32,
@@ -35,7 +38,7 @@ pub fn build(
         }
     }
 
-    std.mem.sort(strip.TileRef, tiles.items, {}, lessThan);
+    try sortTiles(gpa, @intCast(max_tile_x + 1), @intCast(max_tile_y + 1), tiles);
 }
 
 fn appendSegmentTiles(
@@ -138,9 +141,77 @@ fn tileCoordForEnd(x: f32, seg: encode.Segment) i32 {
     return strip.tileCoord(x - 0.001);
 }
 
+fn sortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usize, tiles: *std.ArrayList(strip.TileRef)) !void {
+    if (!try bucketSortTiles(gpa, width_tiles, height_tiles, tiles)) {
+        std.mem.sort(strip.TileRef, tiles.items, {}, lessThan);
+    }
+}
+
+fn bucketSortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usize, tiles: *std.ArrayList(strip.TileRef)) !bool {
+    if (tiles.items.len <= 1) return true;
+    const tile_count = width_tiles * height_tiles;
+    if (tile_count == 0 or tile_count > max_bucket_sort_tiles) return false;
+    if (tile_count > @max(tiles.items.len * 4, min_bucket_sort_tiles)) return false;
+
+    const buckets = try gpa.alloc(usize, tile_count);
+    defer gpa.free(buckets);
+    @memset(buckets, 0);
+
+    for (tiles.items) |tile| {
+        buckets[bucketIndex(width_tiles, tile)] += 1;
+    }
+
+    var running: usize = 0;
+    for (buckets) |*bucket| {
+        const count = bucket.*;
+        bucket.* = running;
+        running += count;
+    }
+
+    const sorted = try gpa.alloc(strip.TileRef, tiles.items.len);
+    defer gpa.free(sorted);
+    for (tiles.items) |tile| {
+        const bucket = bucketIndex(width_tiles, tile);
+        const out_index = buckets[bucket];
+        sorted[out_index] = tile;
+        buckets[bucket] = out_index + 1;
+    }
+
+    @memcpy(tiles.items, sorted);
+    return true;
+}
+
+fn bucketIndex(width_tiles: usize, tile: strip.TileRef) usize {
+    return @as(usize, tile.y) * width_tiles + tile.x;
+}
+
 fn lessThan(_: void, a: strip.TileRef, b: strip.TileRef) bool {
     if (a.y != b.y) return a.y < b.y;
     if (a.x != b.x) return a.x < b.x;
     if (a.call_index != b.call_index) return a.call_index < b.call_index;
     return a.segment_index < b.segment_index;
+}
+
+test "bucket tile sort matches comparison order for production append order" {
+    const testing = std.testing;
+    var tiles: std.ArrayList(strip.TileRef) = .empty;
+    defer tiles.deinit(testing.allocator);
+
+    const input = [_]strip.TileRef{
+        .{ .x = 2, .y = 0, .call_index = 0, .segment_index = 0 },
+        .{ .x = 0, .y = 0, .call_index = 0, .segment_index = 0 },
+        .{ .x = 1, .y = 0, .call_index = 0, .segment_index = 1 },
+        .{ .x = 0, .y = 0, .call_index = 0, .segment_index = 1 },
+        .{ .x = 0, .y = 1, .call_index = 0, .segment_index = 2 },
+        .{ .x = 0, .y = 0, .call_index = 1, .segment_index = 3 },
+        .{ .x = 2, .y = 0, .call_index = 1, .segment_index = 3 },
+    };
+    try tiles.appendSlice(testing.allocator, &input);
+
+    const expected = try testing.allocator.dupe(strip.TileRef, tiles.items);
+    defer testing.allocator.free(expected);
+    std.mem.sort(strip.TileRef, expected, {}, lessThan);
+
+    try sortTiles(testing.allocator, 3, 2, &tiles);
+    try testing.expectEqualSlices(strip.TileRef, expected, tiles.items);
 }

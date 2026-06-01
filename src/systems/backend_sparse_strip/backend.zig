@@ -38,8 +38,10 @@ pub const Profile = struct {
     bin_ns: u64 = 0,
     coarse_ns: u64 = 0,
     texture_views_ns: u64 = 0,
+    gpu_fine_ns: u64 = 0,
     fine_ns: u64 = 0,
     fine_profile: fine.Profile = .{},
+    gpu_fine_profile: gpu_fine.Profile = .{},
     frame_packet: FramePacketStats = .{},
 
     pub fn reset(self: *Profile) void {
@@ -252,6 +254,7 @@ pub const Backend = struct {
         self.rebuildTextureViews() catch return false;
         if (profile) |p| p.texture_views_ns += elapsedSince(texture_views_start);
 
+        const gpu_fine_start = profileStart(profile);
         const supported = gpu_fine.build(
             self.gpa,
             self.fill_rule,
@@ -264,10 +267,11 @@ pub const Backend = struct {
             self.strip_segment_indices.items,
             self.strips.items,
             packet,
+            if (profile) |p| &p.gpu_fine_profile else null,
         ) catch return false;
+        if (profile) |p| p.gpu_fine_ns += elapsedSince(gpu_fine_start);
         if (profile) |p| {
-            p.frame_packet = self.framePacketStats();
-            p.frame_packet.gpu_fine_upload_bytes = packet.stats.upload_bytes;
+            p.frame_packet = self.gpuFineFramePacketStats(packet);
         }
         return supported;
     }
@@ -403,6 +407,33 @@ pub const Backend = struct {
             .max_alpha_bytes_per_call = pressure.max_alpha_bytes_per_call,
             .dense_strip_warnings = pressure.dense_strip_warnings,
             .upload_budget_warnings = @intFromBool((calls_bytes + segments_bytes + strips_bytes + strip_indices_bytes) > gpu_fine_upload_warning_bytes),
+        };
+    }
+
+    fn gpuFineFramePacketStats(self: *const Backend, packet: *const GpuFinePacket) FramePacketStats {
+        const calls_bytes = bytesOf(gpu_fine.GpuCall, packet.calls.items.len);
+        const clips_bytes = bytesOf(gpu_fine.GpuClip, packet.clips.items.len);
+        const clip_indices_bytes = bytesOf(gpu_fine.GpuClipIndex, packet.clip_indices.items.len);
+        const segments_bytes = bytesOf(Segment, self.segments.items.len);
+        const tasks_bytes = bytesOf(gpu_fine.GpuFineTask, packet.tasks.items.len);
+        return .{
+            .calls = packet.calls.items.len,
+            .clips = packet.clips.items.len,
+            .clip_indices = packet.clip_indices.items.len,
+            .segments = self.segments.items.len,
+            .tile_refs = self.tiles.items.len,
+            .strips = self.strips.items.len,
+            .strip_indices = self.strip_segment_indices.items.len,
+            .calls_bytes = calls_bytes,
+            .clips_bytes = clips_bytes,
+            .clip_indices_bytes = clip_indices_bytes,
+            .segments_bytes = segments_bytes,
+            .tile_refs_bytes = bytesOf(TileRef, self.tiles.items.len),
+            .strips_bytes = bytesOf(Strip, self.strips.items.len),
+            .strip_indices_bytes = bytesOf(u32, self.strip_segment_indices.items.len),
+            .frame_packet_bytes = calls_bytes + clips_bytes + clip_indices_bytes + segments_bytes + tasks_bytes,
+            .gpu_fine_upload_bytes = packet.stats.upload_bytes,
+            .upload_budget_warnings = @intFromBool(packet.stats.upload_bytes > gpu_fine_upload_warning_bytes),
         };
     }
 };

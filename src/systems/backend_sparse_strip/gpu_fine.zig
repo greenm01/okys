@@ -12,6 +12,18 @@ pub const task_fill: u32 = 0;
 pub const task_alpha_fill: u32 = 1;
 pub const call_flag_opaque: u32 = 1 << 0;
 
+const SparseConfig = struct {
+    const tile_size: u16 = strip.tile_size;
+    const tile_area: u32 = strip.tile_area;
+    const crossing_insertion_sort_threshold: usize = 32;
+
+    comptime {
+        std.debug.assert(tile_size == 4);
+        std.debug.assert(tile_area == tile_size * tile_size);
+        std.debug.assert((tile_size & (tile_size - 1)) == 0);
+    }
+};
+
 pub const FallbackReason = enum(u8) {
     none,
     unsupported_paint,
@@ -74,10 +86,6 @@ pub const GpuFineTask = extern struct {
     _pad0: u32 = 0,
 };
 
-pub const GpuStripIndex = extern struct {
-    value: u32 = 0,
-};
-
 pub const PacketStats = struct {
     supported: bool = false,
     fallback_reason: FallbackReason = .none,
@@ -92,12 +100,28 @@ pub const PacketStats = struct {
     upload_bytes: usize = 0,
 };
 
+pub const Profile = struct {
+    pack_records_ns: u64 = 0,
+    strip_group_ns: u64 = 0,
+    boundary_mark_ns: u64 = 0,
+    fill_task_ns: u64 = 0,
+    crossing_collect_ns: u64 = 0,
+    crossing_sort_ns: u64 = 0,
+    fill_emit_ns: u64 = 0,
+    crossing_rows: usize = 0,
+    crossing_items: usize = 0,
+    crossing_sort_rows: usize = 0,
+    boundary_checks: usize = 0,
+    boundary_hits: usize = 0,
+    fill_candidates: usize = 0,
+};
+
 pub const Packet = struct {
     calls: std.ArrayList(GpuCall) = .empty,
     clips: std.ArrayList(GpuClip) = .empty,
     clip_indices: std.ArrayList(GpuClipIndex) = .empty,
     tasks: std.ArrayList(GpuFineTask) = .empty,
-    strip_indices: std.ArrayList(GpuStripIndex) = .empty,
+    scratch: Scratch = .{},
     stats: PacketStats = .{},
 
     pub fn deinit(self: *Packet, gpa: std.mem.Allocator) void {
@@ -105,7 +129,7 @@ pub const Packet = struct {
         self.clips.deinit(gpa);
         self.clip_indices.deinit(gpa);
         self.tasks.deinit(gpa);
-        self.strip_indices.deinit(gpa);
+        self.scratch.deinit(gpa);
     }
 
     pub fn clearRetainingCapacity(self: *Packet) void {
@@ -113,12 +137,45 @@ pub const Packet = struct {
         self.clips.clearRetainingCapacity();
         self.clip_indices.clearRetainingCapacity();
         self.tasks.clearRetainingCapacity();
-        self.strip_indices.clearRetainingCapacity();
+        self.scratch.clearBoundaryMask();
+        self.scratch.crossings.clearRetainingCapacity();
         self.stats = .{};
     }
 };
 
-const BoundarySet = std.AutoHashMap(u64, void);
+const Scratch = struct {
+    strips_by_call_starts: []usize = &.{},
+    strips_by_call_indices: []usize = &.{},
+    strips_by_call_cursors: []usize = &.{},
+    crossings: std.ArrayList(Crossing) = .empty,
+    boundary_words: []u64 = &.{},
+    boundary_touched_words: std.ArrayList(usize) = .empty,
+
+    fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
+        freeSlice(gpa, self.strips_by_call_starts);
+        freeSlice(gpa, self.strips_by_call_indices);
+        freeSlice(gpa, self.strips_by_call_cursors);
+        self.crossings.deinit(gpa);
+        freeSlice(gpa, self.boundary_words);
+        self.boundary_touched_words.deinit(gpa);
+        self.* = .{};
+    }
+
+    fn clearBoundaryMask(self: *Scratch) void {
+        for (self.boundary_touched_words.items) |word_index| {
+            self.boundary_words[word_index] = 0;
+        }
+        self.boundary_touched_words.clearRetainingCapacity();
+    }
+
+    fn ensureBoundaryWords(self: *Scratch, gpa: std.mem.Allocator, word_count: usize) !void {
+        if (self.boundary_words.len < word_count) {
+            freeSlice(gpa, self.boundary_words);
+            self.boundary_words = try gpa.alloc(u64, word_count);
+            @memset(self.boundary_words, 0);
+        }
+    }
+};
 
 pub fn build(
     gpa: std.mem.Allocator,
@@ -132,7 +189,10 @@ pub fn build(
     strip_segment_indices: []const u32,
     strips: []const strip.Strip,
     packet: *Packet,
+    profile: ?*Profile,
 ) !bool {
+    _ = strip_segment_indices;
+    if (profile) |p| p.* = .{};
     packet.clearRetainingCapacity();
     packet.stats.calls = calls.len;
     packet.stats.clips = clips.len;
@@ -140,20 +200,19 @@ pub fn build(
     try packet.calls.ensureTotalCapacity(gpa, calls.len);
     try packet.clips.ensureTotalCapacity(gpa, clips.len);
     try packet.clip_indices.ensureTotalCapacity(gpa, call_clip_indices.len);
-    try packet.strip_indices.ensureTotalCapacity(gpa, strip_segment_indices.len);
+
+    const pack_start = profileStart(profile);
     for (clips) |clip| {
         packet.clips.appendAssumeCapacity(packClip(clip));
     }
     for (call_clip_indices) |clip_index| {
         packet.clip_indices.appendAssumeCapacity(.{ .value = clip_index });
     }
-    for (strip_segment_indices) |segment_index| {
-        packet.strip_indices.appendAssumeCapacity(.{ .value = segment_index });
-    }
 
     for (calls) |call| {
         packet.calls.appendAssumeCapacity(packCall(fill_rule, call, segments));
     }
+    if (profile) |p| p.pack_records_ns += elapsedSince(pack_start);
 
     const width = pixelExtent(viewport_width);
     const height = pixelExtent(viewport_height);
@@ -162,25 +221,26 @@ pub fn build(
         return true;
     }
 
-    var boundary_tiles = BoundarySet.init(gpa);
-    defer boundary_tiles.deinit();
-    try boundary_tiles.ensureTotalCapacity(@intCast(strips.len));
-    for (strips) |s| {
-        try boundary_tiles.put(boundaryKey(s.call_index, strip.tileCoord(@floatFromInt(s.x)), strip.tileCoord(@floatFromInt(s.y))), {});
-    }
+    const width_tiles = tileCountForPixels(width);
+    const height_tiles = tileCountForPixels(height);
+    try packet.scratch.ensureBoundaryWords(gpa, wordCountForBits(width_tiles * height_tiles));
 
-    const strips_by_call = try StripsByCall.init(gpa, calls.len, strips);
-    defer strips_by_call.deinit(gpa);
-
-    var crossings: std.ArrayList(Crossing) = .empty;
-    defer crossings.deinit(gpa);
+    const strip_group_start = profileStart(profile);
+    const strips_by_call = try StripsByCall.init(gpa, &packet.scratch, calls.len, strips);
+    if (profile) |p| p.strip_group_ns += elapsedSince(strip_group_start);
 
     for (calls, 0..) |call, call_index_usize| {
         const call_index: u32 = @intCast(call_index_usize);
         const task_start = packet.tasks.items.len;
         const call_fill_rule = fillRuleForCall(fill_rule, call.kind);
+        const call_strips = strips_by_call.indicesForCall(call_index_usize);
 
-        for (strips_by_call.indicesForCall(call_index_usize)) |strip_index| {
+        const boundary_start = profileStart(profile);
+        packet.scratch.clearBoundaryMask();
+        try markBoundaryStrips(gpa, &packet.scratch, width_tiles, height_tiles, strips, call_strips);
+        if (profile) |p| p.boundary_mark_ns += elapsedSince(boundary_start);
+
+        for (call_strips) |strip_index| {
             const s = strips[strip_index];
             try packet.tasks.append(gpa, .{
                 .x = s.x,
@@ -194,19 +254,23 @@ pub fn build(
             packet.stats.alpha_fill_tasks += 1;
         }
 
+        const fill_task_start = profileStart(profile);
         try appendFillTasks(
             gpa,
             call,
             call_index,
             call_fill_rule,
+            packet.calls.items[call_index_usize].bounds,
             segments,
-            &boundary_tiles,
-            &crossings,
+            &packet.scratch,
+            width_tiles,
             width,
             height,
             &packet.tasks,
             &packet.stats,
+            profile,
         );
+        if (profile) |p| p.fill_task_ns += elapsedSince(fill_task_start);
 
         const task_count = packet.tasks.items.len - task_start;
         packet.calls.items[call_index_usize].task_start = @intCast(task_start);
@@ -223,6 +287,7 @@ pub fn build(
         @sizeOf(GpuClipIndex) * packet.clip_indices.items.len +
         @sizeOf(GpuFineTask) * packet.tasks.items.len +
         @sizeOf(encode.Segment) * segments.len;
+    packet.scratch.clearBoundaryMask();
     return true;
 }
 
@@ -230,9 +295,15 @@ const StripsByCall = struct {
     starts: []usize = &.{},
     indices: []usize = &.{},
 
-    fn init(gpa: std.mem.Allocator, call_count: usize, strips: []const strip.Strip) !StripsByCall {
-        var starts = try gpa.alloc(usize, call_count + 1);
-        errdefer gpa.free(starts);
+    fn init(gpa: std.mem.Allocator, scratch: *Scratch, call_count: usize, strips: []const strip.Strip) !StripsByCall {
+        try ensureSliceCapacity(usize, gpa, &scratch.strips_by_call_starts, call_count + 1);
+        try ensureSliceCapacity(usize, gpa, &scratch.strips_by_call_indices, strips.len);
+        try ensureSliceCapacity(usize, gpa, &scratch.strips_by_call_cursors, call_count);
+
+        const starts = scratch.strips_by_call_starts[0 .. call_count + 1];
+        const indices = scratch.strips_by_call_indices[0..strips.len];
+        const cursors = scratch.strips_by_call_cursors[0..call_count];
+
         @memset(starts, 0);
 
         for (strips) |s| {
@@ -245,11 +316,6 @@ const StripsByCall = struct {
             starts[i] += starts[i - 1];
         }
 
-        const indices = try gpa.alloc(usize, strips.len);
-        errdefer gpa.free(indices);
-
-        const cursors = try gpa.alloc(usize, call_count);
-        defer gpa.free(cursors);
         @memcpy(cursors, starts[0..call_count]);
 
         for (strips, 0..) |s, strip_index| {
@@ -264,11 +330,6 @@ const StripsByCall = struct {
             .starts = starts,
             .indices = indices,
         };
-    }
-
-    fn deinit(self: *const StripsByCall, gpa: std.mem.Allocator) void {
-        gpa.free(self.starts);
-        gpa.free(self.indices);
     }
 
     fn indicesForCall(self: *const StripsByCall, call_index: usize) []const usize {
@@ -286,15 +347,16 @@ fn appendFillTasks(
     call: encode.EncodedCall,
     call_index: u32,
     fill_rule: strip.FillRule,
+    bounds: [4]f32,
     segments: []const encode.Segment,
-    boundary_tiles: *const BoundarySet,
-    crossings: *std.ArrayList(Crossing),
+    scratch: *Scratch,
+    width_tiles: usize,
     width: u32,
     height: u32,
     tasks: *std.ArrayList(GpuFineTask),
     stats: *PacketStats,
+    profile: ?*Profile,
 ) !void {
-    const bounds = callBounds(call, segments);
     if (bounds[0] >= bounds[2] or bounds[1] >= bounds[3]) return;
 
     const max_tile_x = strip.tileCoord(@as(f32, @floatFromInt(width)) - 0.001);
@@ -305,20 +367,36 @@ fn appendFillTasks(
 
     while (tile_y <= tile_y_end) : (tile_y += 1) {
         const sample_y = @as(f32, @floatFromInt(tile_y)) * tile_size_f + 0.5;
-        var winding = try collectCrossings(gpa, call.segments, segments, sample_y, crossings);
-        if (crossings.items.len == 0) continue;
-        std.mem.sort(Crossing, crossings.items, {}, crossingLessThan);
+        const crossing_result = try collectCrossings(gpa, call.segments, segments, sample_y, &scratch.crossings);
+        if (profile) |p| {
+            p.crossing_rows += 1;
+            p.crossing_items += scratch.crossings.items.len;
+        }
+        if (scratch.crossings.items.len == 0) continue;
 
+        const sorted = sortCrossingsIfNeeded(scratch.crossings.items, crossing_result.sorted);
+        if (profile) |p| {
+            if (sorted) {
+                p.crossing_sort_rows += 1;
+            }
+        }
+
+        var winding = crossing_result.winding;
         var tile_x = std.math.clamp(strip.tileCoord(bounds[0]), 0, max_tile_x);
         const tile_x_end = std.math.clamp(strip.tileCoord(bounds[2] - 0.001), 0, max_tile_x);
         var crossing_index: usize = 0;
         while (tile_x <= tile_x_end) : (tile_x += 1) {
             const sample_x = @as(f32, @floatFromInt(tile_x)) * tile_size_f + 0.5;
-            while (crossing_index < crossings.items.len and crossings.items[crossing_index].x <= sample_x) : (crossing_index += 1) {
-                winding -= crossings.items[crossing_index].winding;
+            while (crossing_index < scratch.crossings.items.len and scratch.crossings.items[crossing_index].x <= sample_x) : (crossing_index += 1) {
+                winding -= scratch.crossings.items[crossing_index].winding;
             }
             if (!filled(fill_rule, winding)) continue;
-            if (boundary_tiles.contains(boundaryKey(call_index, tile_x, tile_y))) continue;
+            if (profile) |p| p.fill_candidates += 1;
+            if (profile) |p| p.boundary_checks += 1;
+            if (containsBoundaryTile(scratch, width_tiles, tile_x, tile_y)) {
+                if (profile) |p| p.boundary_hits += 1;
+                continue;
+            }
             try tasks.append(gpa, .{
                 .x = @intCast(strip.tileOrigin(@intCast(tile_x))),
                 .y = @intCast(strip.tileOrigin(@intCast(tile_y))),
@@ -330,28 +408,62 @@ fn appendFillTasks(
     }
 }
 
+const CrossingResult = struct {
+    winding: i32 = 0,
+    sorted: bool = true,
+};
+
 fn collectCrossings(
     gpa: std.mem.Allocator,
     range: strip.Range,
     segments: []const encode.Segment,
     py: f32,
     crossings: *std.ArrayList(Crossing),
-) !i32 {
+) !CrossingResult {
     crossings.clearRetainingCapacity();
     const start: usize = @intCast(range.start);
     const count: usize = @intCast(range.count);
     try crossings.ensureTotalCapacity(gpa, count);
 
     var winding: i32 = 0;
+    var sorted = true;
+    var have_last = false;
+    var last_x: f32 = 0;
     for (segments[start..][0..count]) |seg| {
         const delta = crossingDelta(py, seg) orelse continue;
+        const x = intersectX(py, seg);
+        if (have_last and x < last_x) sorted = false;
         try crossings.append(gpa, .{
-            .x = intersectX(py, seg),
+            .x = x,
             .winding = delta,
         });
+        have_last = true;
+        last_x = x;
         winding += delta;
     }
-    return winding;
+    return .{ .winding = winding, .sorted = sorted };
+}
+
+fn sortCrossingsIfNeeded(crossings: []Crossing, already_sorted: bool) bool {
+    if (already_sorted or crossings.len <= 1) return false;
+    if (crossings.len <= SparseConfig.crossing_insertion_sort_threshold) {
+        insertionSortCrossings(crossings);
+    } else {
+        std.mem.sort(Crossing, crossings, {}, crossingLessThan);
+    }
+    return true;
+}
+
+fn insertionSortCrossings(crossings: []Crossing) void {
+    var i: usize = 1;
+    while (i < crossings.len) : (i += 1) {
+        const value = crossings[i];
+        var j = i;
+        while (j > 0 and value.x < crossings[j - 1].x) : (j -= 1) {
+            crossings[j] = crossings[j - 1];
+        }
+        crossings[j] = value;
+    }
 }
 
 fn crossingDelta(py: f32, seg: encode.Segment) ?i32 {
@@ -510,10 +622,70 @@ fn filled(fill_rule: strip.FillRule, winding: i32) bool {
     };
 }
 
-fn boundaryKey(call_index: u32, tile_x: i32, tile_y: i32) u64 {
-    return (@as(u64, call_index) << 42) |
-        (@as(u64, @intCast(tile_y)) << 21) |
-        @as(u64, @intCast(tile_x));
+fn markBoundaryStrips(
+    gpa: std.mem.Allocator,
+    scratch: *Scratch,
+    width_tiles: usize,
+    height_tiles: usize,
+    strips: []const strip.Strip,
+    strip_indices: []const usize,
+) !void {
+    try scratch.boundary_touched_words.ensureUnusedCapacity(gpa, strip_indices.len);
+    for (strip_indices) |strip_index| {
+        const s = strips[strip_index];
+        const tile_x: usize = @intCast(s.x / SparseConfig.tile_size);
+        const tile_y: usize = @intCast(s.y / SparseConfig.tile_size);
+        if (tile_x >= width_tiles or tile_y >= height_tiles) continue;
+        const bit_index = tile_y * width_tiles + tile_x;
+        const word_index = bit_index >> 6;
+        const mask = @as(u64, 1) << @intCast(bit_index & 63);
+        if (scratch.boundary_words[word_index] == 0) {
+            scratch.boundary_touched_words.appendAssumeCapacity(word_index);
+        }
+        scratch.boundary_words[word_index] |= mask;
+    }
+}
+
+fn containsBoundaryTile(scratch: *const Scratch, width_tiles: usize, tile_x: i32, tile_y: i32) bool {
+    const x: usize = @intCast(tile_x);
+    const y: usize = @intCast(tile_y);
+    const bit_index = y * width_tiles + x;
+    const word = scratch.boundary_words[bit_index >> 6];
+    const mask = @as(u64, 1) << @intCast(bit_index & 63);
+    return (word & mask) != 0;
+}
+
+fn tileCountForPixels(pixels: u32) usize {
+    return (@as(usize, pixels) + SparseConfig.tile_size - 1) / SparseConfig.tile_size;
+}
+
+fn wordCountForBits(bit_count: usize) usize {
+    return (bit_count + 63) / 64;
+}
+
+fn ensureSliceCapacity(comptime T: type, gpa: std.mem.Allocator, slice: *[]T, len: usize) !void {
+    if (slice.*.len >= len) return;
+    freeSlice(gpa, slice.*);
+    slice.* = try gpa.alloc(T, len);
+}
+
+fn freeSlice(gpa: std.mem.Allocator, slice: anytype) void {
+    if (slice.len != 0) gpa.free(slice);
+}
+
+fn profileStart(profile: ?*Profile) u64 {
+    return if (profile != null) nowNs() else 0;
+}
+
+fn elapsedSince(start: u64) u64 {
+    if (start == 0) return 0;
+    return nowNs() - start;
+}
+
+fn nowNs() u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) unreachable;
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
 fn pixelExtent(value: f32) u32 {
@@ -579,5 +751,4 @@ comptime {
     std.debug.assert(@offsetOf(GpuFineTask, "x") == 0);
     std.debug.assert(@offsetOf(GpuFineTask, "call_index") == 8);
     std.debug.assert(@offsetOf(GpuFineTask, "segment_start") == 16);
-    std.debug.assert(@sizeOf(GpuStripIndex) == 4);
 }

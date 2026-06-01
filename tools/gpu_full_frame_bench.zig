@@ -25,6 +25,14 @@ const Accumulator = struct {
     bin_ns: u128 = 0,
     coarse_ns: u128 = 0,
     texture_views_ns: u128 = 0,
+    gpu_fine_ns: u128 = 0,
+    gpu_pack_records_ns: u128 = 0,
+    gpu_strip_group_ns: u128 = 0,
+    gpu_boundary_mark_ns: u128 = 0,
+    gpu_fill_task_ns: u128 = 0,
+    gpu_crossing_collect_ns: u128 = 0,
+    gpu_crossing_sort_ns: u128 = 0,
+    gpu_fill_emit_ns: u128 = 0,
     cpu_encode_ns: u128 = 0,
     commit_ns: u128 = 0,
     resource_ns: u128 = 0,
@@ -52,6 +60,14 @@ const Accumulator = struct {
         self.bin_ns += profile.bin_ns;
         self.coarse_ns += profile.coarse_ns;
         self.texture_views_ns += profile.texture_views_ns;
+        self.gpu_fine_ns += profile.gpu_fine_ns;
+        self.gpu_pack_records_ns += profile.gpu_fine_profile.pack_records_ns;
+        self.gpu_strip_group_ns += profile.gpu_fine_profile.strip_group_ns;
+        self.gpu_boundary_mark_ns += profile.gpu_fine_profile.boundary_mark_ns;
+        self.gpu_fill_task_ns += profile.gpu_fine_profile.fill_task_ns;
+        self.gpu_crossing_collect_ns += profile.gpu_fine_profile.crossing_collect_ns;
+        self.gpu_crossing_sort_ns += profile.gpu_fine_profile.crossing_sort_ns;
+        self.gpu_fill_emit_ns += profile.gpu_fine_profile.fill_emit_ns;
         self.cpu_encode_ns += timing.total_ns;
         self.commit_ns += commit_ns;
         self.resource_ns += timing.resource_ns;
@@ -209,7 +225,7 @@ fn fail(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tcalls\ttasks\tdispatches\tupload_bytes\tfallback\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tcalls\ttasks\tdispatches\tupload_bytes\tfallback\n");
 }
 
 fn printResult(result: Accumulator) void {
@@ -219,7 +235,7 @@ fn printResult(result: Accumulator) void {
     const submit_avg = cpu_encode_avg + commit_avg;
     const scene_name = "ghostscript_tiger";
     _ = std.c.printf(
-        "%.*s\tsparse_strip\tgpu_full_frame\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
+        "%.*s\tsparse_strip\tgpu_full_frame\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         u64ForPrint(measured_frames),
@@ -230,6 +246,14 @@ fn printResult(result: Accumulator) void {
         u64ForPrint(average(result.bin_ns)),
         u64ForPrint(average(result.coarse_ns)),
         u64ForPrint(average(result.texture_views_ns)),
+        u64ForPrint(average(result.gpu_fine_ns)),
+        u64ForPrint(average(result.gpu_pack_records_ns)),
+        u64ForPrint(average(result.gpu_strip_group_ns)),
+        u64ForPrint(average(result.gpu_boundary_mark_ns)),
+        u64ForPrint(average(result.gpu_fill_task_ns)),
+        u64ForPrint(average(result.gpu_crossing_collect_ns)),
+        u64ForPrint(average(result.gpu_crossing_sort_ns)),
+        u64ForPrint(average(result.gpu_fill_emit_ns)),
         u64ForPrint(cpu_encode_avg),
         u64ForPrint(commit_avg),
         u64ForPrint(average(result.resource_ns)),
