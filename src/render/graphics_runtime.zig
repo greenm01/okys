@@ -236,6 +236,9 @@ pub const Runtime = struct {
 
     fn submitSparse(self: *Runtime, backend: *SparseBackend, swapchain: sokol_device.Swapchain, view_width: f32, view_height: f32) bool {
         if (backend.calls.items.len == 0) {
+            const pass = sokol_device.swapchainPassWithAction(sokol_device.sparseSwapchainPassAction(), swapchain);
+            self.device.beginPass(pass);
+            sokol_device.Device.endPass();
             sokol_device.Device.commit();
             return true;
         }
@@ -244,7 +247,7 @@ pub const Runtime = struct {
         if (!self.rebuildTextures(backend)) return false;
 
         var timing: sokol_device.SparseFineSubmitTiming = .{};
-        const pass = sokol_device.swapchainPassWithAction(sokol_device.loadPassAction(), swapchain);
+        const pass = sokol_device.swapchainPassWithAction(sokol_device.sparseSwapchainPassAction(), swapchain);
         const target_width: u32 = @intCast(swapchain.width);
         const target_height: u32 = @intCast(swapchain.height);
         const drew = self.device.drawSparseFineSurfaceTimed(

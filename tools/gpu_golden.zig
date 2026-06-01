@@ -70,10 +70,23 @@ const fixtures = [_]Fixture{
     },
 };
 
+const custom_fixtures = [_]Fixture{
+    .{
+        .name = "large_mask_image_pattern",
+        .hash = 0xb8e92b3350993d05,
+        .probes = &.{
+            .{ .x = 72, .y = 52, .rgba = .{ 64, 64, 69, 255 } },
+            .{ .x = 160, .y = 120, .rgba = .{ 255, 255, 255, 255 } },
+            .{ .x = 180, .y = 130, .rgba = .{ 255, 255, 255, 255 } },
+        },
+    },
+};
+
 var ctx: ?*okys.state.context.Context = null;
 var target: ?sokol_device.GlOffscreenTarget = null;
 var pixels: []u8 = &.{};
 var current_scene: usize = 0;
+var current_custom_scene: usize = 0;
 var failed = false;
 
 pub fn main() void {
@@ -114,7 +127,16 @@ fn init() callconv(.c) void {
 fn frame() callconv(.c) void {
     if (failed) return;
     if (current_scene >= active_specs.len) {
-        app.requestQuit();
+        if (current_custom_scene >= custom_fixtures.len) {
+            app.requestQuit();
+        } else {
+            renderCustomScene(custom_fixtures[current_custom_scene]) catch |err| {
+                fail("custom render failed for {s}: {s}", .{ custom_fixtures[current_custom_scene].name, @errorName(err) });
+                return;
+            };
+            current_custom_scene += 1;
+            if (current_custom_scene >= custom_fixtures.len) app.requestQuit();
+        }
         return;
     }
 
@@ -143,7 +165,6 @@ fn frame() callconv(.c) void {
     }
 
     current_scene += 1;
-    if (current_scene >= active_specs.len) app.requestQuit();
 }
 
 fn cleanup() callconv(.c) void {
@@ -198,6 +219,92 @@ fn renderScene(spec: bench_scenes.SceneSpec) !void {
     spec.draw(c, image_id);
     c_api.okyEndFrame(c);
     if (image_id != .none) image_ops.deleteImage(c, image_id);
+}
+
+fn renderCustomScene(fixture: Fixture) !void {
+    const c = ctx orelse return error.MissingContext;
+    const t = target orelse return error.MissingTarget;
+
+    var render_target: graphics_runtime.RenderTarget = .{
+        .backend = @intFromEnum(graphics_runtime.GraphicsBackend.gl),
+        .width_px = width_px,
+        .height_px = height_px,
+        .color_format = @intFromEnum(graphics_runtime.PixelFormat.rgba8),
+        .depth_format = @intFromEnum(graphics_runtime.PixelFormat.depth_stencil),
+        .sample_count = 1,
+        .gl_framebuffer = t.framebuffer,
+        .metal_current_drawable = null,
+        .metal_depth_stencil_texture = null,
+        .metal_msaa_color_texture = null,
+        .d3d11_render_view = null,
+        .d3d11_resolve_view = null,
+        .d3d11_depth_stencil_view = null,
+        .vulkan_render_image = null,
+        .vulkan_render_view = null,
+        .vulkan_resolve_image = null,
+        .vulkan_resolve_view = null,
+        .vulkan_depth_stencil_image = null,
+        .vulkan_depth_stencil_view = null,
+        .vulkan_render_finished_semaphore = null,
+        .vulkan_present_complete_semaphore = null,
+        .webgpu_render_view = null,
+        .webgpu_resolve_view = null,
+        .webgpu_depth_stencil_view = null,
+    };
+    if (c_api.okySetRenderTarget(c, &render_target) != 1) return error.SetRenderTargetFailed;
+
+    c_api.okyBeginFrame(c, bench_scenes.scene_width, bench_scenes.scene_height, 1.0);
+    const image_id = createLargeMaskImage(c);
+    drawLargeMaskImagePattern(c, image_id);
+    c_api.okyEndFrame(c);
+    if (image_id != .none) image_ops.deleteImage(c, image_id);
+
+    try readPixels();
+    const actual_hash = fnv1a64(pixels);
+    const probe_ok = compareProbes(fixture, fixture.name);
+    const hash_ok = fixture.hash == 0 or fixture.hash == actual_hash;
+    printResult(fixture.name, actual_hash, fixture.hash, hash_ok, probe_ok);
+    if (!hash_ok or !probe_ok) {
+        failed = true;
+        app.requestQuit();
+    }
+}
+
+fn createLargeMaskImage(c: *okys.state.context.Context) okys.types.image.ImageId {
+    const image_width: usize = 128;
+    const image_height: usize = 96;
+    var image_pixels: [image_width * image_height * 4]u8 = undefined;
+    var y: usize = 0;
+    while (y < image_height) : (y += 1) {
+        var x: usize = 0;
+        while (x < image_width) : (x += 1) {
+            const inside_mark = x >= 30 and x < 98 and y >= 22 and y < 74;
+            const index = (y * image_width + x) * 4;
+            image_pixels[index + 0] = 255;
+            image_pixels[index + 1] = 255;
+            image_pixels[index + 2] = 255;
+            image_pixels[index + 3] = if (inside_mark) 255 else 0;
+        }
+    }
+    return image_ops.createImageRGBA(c, image_width, image_height, &image_pixels);
+}
+
+fn drawLargeMaskImagePattern(c: *okys.state.context.Context, image_id: okys.types.image.ImageId) void {
+    const color = okys.types.color;
+    const paint_ops = okys.ops.paint;
+    const path_ops = okys.ops.path;
+    const render_ops = okys.ops.render;
+
+    paint_ops.fillColor(c, color.rgbaf(0.25, 0.25, 0.27, 1.0));
+    path_ops.beginPath(c);
+    path_ops.rect(c, 0, 0, bench_scenes.scene_width, bench_scenes.scene_height);
+    render_ops.fill(c);
+
+    if (image_id == .none) return;
+    paint_ops.fillPaint(c, paint_ops.imagePattern(c, 80, 60, 160, 120, 0, @intCast(@intFromEnum(image_id)), 1.0));
+    path_ops.beginPath(c);
+    path_ops.rect(c, 80, 60, 160, 120);
+    render_ops.fill(c);
 }
 
 fn readPixels() !void {

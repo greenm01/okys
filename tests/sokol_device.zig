@@ -50,6 +50,17 @@ test "clear pass action clears and stores first color target" {
     try testing.expectApproxEqAbs(@as(f32, 1.0), action.colors[0].clear_value.a, 0.001);
 }
 
+test "sparse swapchain pass action clears stale presentation pixels" {
+    const action = sokol_device.sparseSwapchainPassAction();
+
+    try testing.expectEqual(@as(@TypeOf(action.colors[0].load_action), .CLEAR), action.colors[0].load_action);
+    try testing.expectEqual(@as(@TypeOf(action.colors[0].store_action), .STORE), action.colors[0].store_action);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), action.colors[0].clear_value.r, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), action.colors[0].clear_value.g, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), action.colors[0].clear_value.b, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), action.colors[0].clear_value.a, 0.001);
+}
+
 test "offscreen pass helpers create rgba8 color attachment descriptors" {
     const image_desc = sokol_device.offscreenColorImageDesc(64, 32);
     try testing.expect(image_desc.usage.color_attachment);
