@@ -178,6 +178,7 @@ const Scratch = struct {
     row_segment_starts: []usize = &.{},
     row_segment_indices: []u32 = &.{},
     row_segment_cursors: []usize = &.{},
+    prepared_segments: []PreparedSegmentRows = &.{},
     row_crossing_starts: []usize = &.{},
     row_crossings: []Crossing = &.{},
     row_crossing_cursors: []usize = &.{},
@@ -195,6 +196,7 @@ const Scratch = struct {
         freeSlice(gpa, self.row_segment_starts);
         freeSlice(gpa, self.row_segment_indices);
         freeSlice(gpa, self.row_segment_cursors);
+        freeSlice(gpa, self.prepared_segments);
         freeSlice(gpa, self.row_crossing_starts);
         freeSlice(gpa, self.row_crossings);
         freeSlice(gpa, self.row_crossing_cursors);
@@ -431,6 +433,9 @@ const ActiveSegmentRows = struct {
         const row_count: usize = @intCast(row_end - row_base + 1);
         try ensureSliceCapacity(usize, gpa, &scratch.row_segment_starts, row_count + 1);
         try ensureSliceCapacity(usize, gpa, &scratch.row_segment_cursors, row_count);
+        const segment_start: usize = @intCast(range.start);
+        const segment_count: usize = @intCast(range.count);
+        try ensureSliceCapacity(PreparedSegmentRows, gpa, &scratch.prepared_segments, segment_count);
         try ensureSliceCapacity(usize, gpa, &scratch.row_crossing_starts, row_count + 1);
         try ensureSliceCapacity(usize, gpa, &scratch.row_crossing_cursors, row_count);
         try ensureSliceCapacity(i32, gpa, &scratch.row_windings, row_count);
@@ -446,6 +451,7 @@ const ActiveSegmentRows = struct {
         const sorted = scratch.row_sorted[0..row_count];
         const have_last_crossing = scratch.row_have_last_crossing[0..row_count];
         const last_crossing_x = scratch.row_last_crossing_x[0..row_count];
+        const prepared_segments = scratch.prepared_segments[0..segment_count];
         @memset(starts, 0);
         @memset(crossing_starts, 0);
         @memset(windings, 0);
@@ -453,15 +459,21 @@ const ActiveSegmentRows = struct {
         @memset(have_last_crossing, false);
         @memset(last_crossing_x, 0);
 
-        const segment_start: usize = @intCast(range.start);
-        const segment_count: usize = @intCast(range.count);
-        for (segments[segment_start..][0..segment_count]) |seg| {
-            const rows = activeRowsForSegment(seg, row_base, row_end) orelse continue;
-            var row = rows.start;
-            while (row <= rows.end) : (row += 1) {
-                starts[@intCast(row - row_base + 1)] += 1;
-                const sample_y = sampleYForTileRow(row);
-                if (crossingDelta(sample_y, seg) != null) {
+        for (segments[segment_start..][0..segment_count], 0..) |seg, offset| {
+            const active_rows = activeRowsForSegment(seg, row_base, row_end);
+            const crossing_rows = sampleRowsForSegment(seg, row_base, row_end);
+            prepared_segments[offset] = preparedRowsForSegment(seg, active_rows, crossing_rows);
+
+            if (prepared_segments[offset].active_rows) |rows| {
+                var row = rows.start;
+                while (row <= rows.end) : (row += 1) {
+                    starts[@intCast(row - row_base + 1)] += 1;
+                }
+            }
+
+            if (prepared_segments[offset].crossing_rows) |rows| {
+                var row = rows.start;
+                while (row <= rows.end) : (row += 1) {
                     crossing_starts[@intCast(row - row_base + 1)] += 1;
                 }
             }
@@ -482,30 +494,36 @@ const ActiveSegmentRows = struct {
         @memcpy(cursors, starts[0..row_count]);
         @memcpy(crossing_cursors, crossing_starts[0..row_count]);
 
-        for (segments[segment_start..][0..segment_count], 0..) |seg, offset| {
-            const rows = activeRowsForSegment(seg, row_base, row_end) orelse continue;
-            var row = rows.start;
-            while (row <= rows.end) : (row += 1) {
-                const local_row: usize = @intCast(row - row_base);
-                const out_index = cursors[local_row];
-                indices[out_index] = @intCast(segment_start + offset);
-                cursors[local_row] += 1;
-
-                const sample_y = sampleYForTileRow(row);
-                const delta = crossingDelta(sample_y, seg) orelse continue;
-                const x = intersectX(sample_y, seg);
-                if (have_last_crossing[local_row] and x < last_crossing_x[local_row]) {
-                    sorted[local_row] = false;
+        for (prepared_segments, 0..) |prepared, offset| {
+            if (prepared.active_rows) |rows| {
+                var row = rows.start;
+                while (row <= rows.end) : (row += 1) {
+                    const local_row: usize = @intCast(row - row_base);
+                    const out_index = cursors[local_row];
+                    indices[out_index] = @intCast(segment_start + offset);
+                    cursors[local_row] += 1;
                 }
-                const crossing_index = crossing_cursors[local_row];
-                crossings[crossing_index] = .{
-                    .x = x,
-                    .winding = delta,
-                };
-                crossing_cursors[local_row] += 1;
-                have_last_crossing[local_row] = true;
-                last_crossing_x[local_row] = x;
-                windings[local_row] += delta;
+            }
+
+            if (prepared.crossing_rows) |rows| {
+                var row = rows.start;
+                var x = prepared.first_crossing_x;
+                while (row <= rows.end) : (row += 1) {
+                    const local_row: usize = @intCast(row - row_base);
+                    if (have_last_crossing[local_row] and x < last_crossing_x[local_row]) {
+                        sorted[local_row] = false;
+                    }
+                    const crossing_index = crossing_cursors[local_row];
+                    crossings[crossing_index] = .{
+                        .x = x,
+                        .winding = prepared.crossing_delta,
+                    };
+                    crossing_cursors[local_row] += 1;
+                    have_last_crossing[local_row] = true;
+                    last_crossing_x[local_row] = x;
+                    windings[local_row] += prepared.crossing_delta;
+                    x += prepared.crossing_step_x;
+                }
             }
         }
 
@@ -554,12 +572,59 @@ const RowCrossings = struct {
     sorted: bool = true,
 };
 
+const PreparedSegmentRows = struct {
+    active_rows: ?ActiveRowRange = null,
+    crossing_rows: ?ActiveRowRange = null,
+    first_crossing_x: f32 = 0,
+    crossing_step_x: f32 = 0,
+    crossing_delta: i32 = 0,
+};
+
+fn preparedRowsForSegment(
+    seg: encode.Segment,
+    active_rows: ?ActiveRowRange,
+    crossing_rows: ?ActiveRowRange,
+) PreparedSegmentRows {
+    var prepared: PreparedSegmentRows = .{
+        .active_rows = active_rows,
+        .crossing_rows = crossing_rows,
+    };
+    const rows = crossing_rows orelse return prepared;
+    const sample_y = sampleYForTileRow(rows.start);
+    prepared.crossing_delta = crossingDelta(sample_y, seg) orelse {
+        prepared.crossing_rows = null;
+        return prepared;
+    };
+    prepared.first_crossing_x = intersectX(sample_y, seg);
+    const dy = seg.y1 - seg.y0;
+    if (dy != 0) {
+        prepared.crossing_step_x = ((seg.x1 - seg.x0) / dy) * @as(f32, @floatFromInt(strip.tile_size));
+    }
+    return prepared;
+}
+
 fn activeRowsForSegment(seg: encode.Segment, row_base: i32, row_end: i32) ?ActiveRowRange {
     const min_y = @min(seg.y0, seg.y1);
     const max_y = @max(seg.y0, seg.y1);
     if (max_y <= min_y) return null;
     const start = std.math.clamp(strip.tileCoord(min_y), row_base, row_end);
     const end = std.math.clamp(strip.tileCoord(max_y - 0.001), row_base, row_end);
+    if (start > end) return null;
+    return .{ .start = start, .end = end };
+}
+
+fn sampleRowsForSegment(seg: encode.Segment, row_base: i32, row_end: i32) ?ActiveRowRange {
+    const min_y = @min(seg.y0, seg.y1);
+    const max_y = @max(seg.y0, seg.y1);
+    if (max_y <= min_y) return null;
+
+    const tile_size_f: f32 = @floatFromInt(strip.tile_size);
+    const start_raw: i32 = @intFromFloat(@ceil((min_y - 0.5) / tile_size_f));
+    const end_raw: i32 = @intFromFloat(@ceil((max_y - 0.5) / tile_size_f) - 1);
+    if (start_raw > end_raw or start_raw > row_end or end_raw < row_base) return null;
+
+    const start = std.math.clamp(start_raw, row_base, row_end);
+    const end = std.math.clamp(end_raw, row_base, row_end);
     if (start > end) return null;
     return .{ .start = start, .end = end };
 }
@@ -1187,6 +1252,56 @@ test "sparse GPU active rows keep boundary rows half-open" {
     }, 0, 4).?;
     try testing.expectEqual(@as(i32, 1), row.start);
     try testing.expectEqual(@as(i32, 1), row.end);
+}
+
+test "sparse GPU sample rows use tile-center half-open crossings" {
+    const testing = std.testing;
+
+    const boundary_row = sampleRowsForSegment(.{
+        .x0 = 0,
+        .y0 = 4,
+        .x1 = 8,
+        .y1 = 8,
+    }, 0, 4).?;
+    try testing.expectEqual(@as(i32, 1), boundary_row.start);
+    try testing.expectEqual(@as(i32, 1), boundary_row.end);
+
+    const active_only = activeRowsForSegment(.{
+        .x0 = 0,
+        .y0 = 4.6,
+        .x1 = 8,
+        .y1 = 8.4,
+    }, 0, 4).?;
+    try testing.expectEqual(@as(i32, 1), active_only.start);
+    try testing.expectEqual(@as(i32, 2), active_only.end);
+    try testing.expect(sampleRowsForSegment(.{
+        .x0 = 0,
+        .y0 = 4.6,
+        .x1 = 8,
+        .y1 = 8.4,
+    }, 0, 4) == null);
+
+    const reversed = sampleRowsForSegment(.{
+        .x0 = 0,
+        .y0 = 12,
+        .x1 = 8,
+        .y1 = 4,
+    }, 0, 4).?;
+    try testing.expectEqual(@as(i32, 1), reversed.start);
+    try testing.expectEqual(@as(i32, 2), reversed.end);
+    try testing.expectEqual(@as(i32, -1), preparedRowsForSegment(.{
+        .x0 = 0,
+        .y0 = 12,
+        .x1 = 8,
+        .y1 = 4,
+    }, null, reversed).crossing_delta);
+
+    try testing.expect(sampleRowsForSegment(.{
+        .x0 = 0,
+        .y0 = 4,
+        .x1 = 8,
+        .y1 = 4,
+    }, 0, 4) == null);
 }
 
 test "sparse GPU active row index returns global segment indices" {
