@@ -51,12 +51,10 @@ struct GpuFineTask {
     uint x;
     uint y;
     uint call_index;
-    uint kind;
-    uint segment_start;
-    uint segment_count;
-    uint strip_index;
-    uint _pad0;
+    uint kind_aux;
 };
+
+const uint task_kind_alpha_mask = 0x80000000u;
 
 float integrate_clamped_linear(float slope, float intercept, float y0, float y1) {
     if (slope == 0.0) {
@@ -126,6 +124,14 @@ float segment_area(float px, float py, Segment seg) {
     float slope = (seg.x1 - seg.x0) / dy;
     float intercept = seg.x0 - slope * seg.y0 - px;
     float sign = dy > 0.0 ? 1.0 : -1.0;
+    float x0 = slope * y0 + intercept;
+    float x1 = slope * y1 + intercept;
+    if (x0 <= 0.0 && x1 <= 0.0) {
+        return 0.0;
+    }
+    if (x0 >= 1.0 && x1 >= 1.0) {
+        return sign * (y1 - y0);
+    }
     return sign * integrate_clamped_linear(slope, intercept, y0, y1);
 }
 
@@ -250,8 +256,8 @@ void main() {
     }
 
     float alpha = 1.0;
-    if (task.kind == 1u) {
-        alpha = coverage_for_range(call.fill_rule, task.segment_start, task.segment_count, x, y);
+    if ((task.kind_aux & task_kind_alpha_mask) != 0u) {
+        alpha = coverage_for_range(call.fill_rule, call.segment_start, call.segment_count, x, y);
     }
     if (alpha <= 0.0) {
         return;

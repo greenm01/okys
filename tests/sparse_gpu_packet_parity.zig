@@ -176,7 +176,7 @@ test "GPU packet simulator matches sparse CPU proof for even odd path clip" {
     try expectPacketMatchesCpu(backend, 2);
 }
 
-test "GPU packet alpha-fill tasks use full call segment ranges" {
+test "GPU packet alpha-fill tasks use compact task records" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
     const iface = backend.interface();
@@ -191,12 +191,11 @@ test "GPU packet alpha-fill tasks use full call segment ranges" {
     defer packet.deinit(testing.allocator);
     try testing.expect(backend.buildGpuFinePacket(&packet, null));
     try testing.expect(packet.stats.alpha_fill_tasks > 0);
+    try testing.expectEqual(@as(usize, 16), @sizeOf(sparse.gpu_fine.GpuFineTask));
 
     for (packet.tasks.items) |task| {
-        if (task.kind != sparse.gpu_fine.task_alpha_fill) continue;
-        const call = backend.calls.items[task.call_index];
-        try testing.expectEqual(call.segments.start, task.segment_start);
-        try testing.expectEqual(call.segments.count, task.segment_count);
+        if (!sparse.gpu_fine.taskIsAlpha(task)) continue;
+        try testing.expectEqual(@as(u32, 0), sparse.gpu_fine.taskAlphaIndex(task));
     }
 }
 
@@ -285,10 +284,10 @@ fn simulateTask(
             if (x >= width or y >= height) continue;
 
             var alpha: f32 = 1;
-            if (task.kind == sparse.gpu_fine.task_alpha_fill) {
+            if (sparse.gpu_fine.taskIsAlpha(task)) {
                 var area: f32 = 0;
-                const start: usize = @intCast(task.segment_start);
-                const count: usize = @intCast(task.segment_count);
+                const start: usize = @intCast(call.segment_start);
+                const count: usize = @intCast(call.segment_count);
                 for (segments[start..][0..count]) |seg| {
                     area += segmentArea(@as(f32, @floatFromInt(x)), @as(f32, @floatFromInt(y)), seg);
                 }
@@ -547,7 +546,7 @@ fn expectSurfaceApprox(expected: []const u8, actual: []const u8, tolerance: u8) 
 
 fn expectAlphaTaskAt(tasks: []const sparse.gpu_fine.GpuFineTask, x: u32, y: u32) !void {
     for (tasks) |task| {
-        if (task.kind == sparse.gpu_fine.task_alpha_fill and task.x == x and task.y == y) return;
+        if (sparse.gpu_fine.taskIsAlpha(task) and task.x == x and task.y == y) return;
     }
     std.debug.print("missing alpha-fill task at {d},{d}\n", .{ x, y });
     return error.MissingAlphaFillTask;

@@ -198,8 +198,8 @@ test "sparse GPU fine packet encodes solid Fill and AlphaFill tasks by call" {
     var saw_alpha_fill = false;
     for (packet.tasks.items) |task| {
         try testing.expectEqual(@as(u32, 0), task.call_index);
-        if (task.kind == sparse.gpu_fine.task_fill) saw_fill = true;
-        if (task.kind == sparse.gpu_fine.task_alpha_fill) saw_alpha_fill = true;
+        if (!sparse.gpu_fine.taskIsAlpha(task)) saw_fill = true;
+        if (sparse.gpu_fine.taskIsAlpha(task)) saw_alpha_fill = true;
     }
     try testing.expect(saw_fill);
     try testing.expect(saw_alpha_fill);

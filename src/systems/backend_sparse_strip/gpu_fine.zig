@@ -10,6 +10,7 @@ const xforms = @import("../transform.zig");
 
 pub const task_fill: u32 = 0;
 pub const task_alpha_fill: u32 = 1;
+pub const task_kind_alpha_mask: u32 = 0x80000000;
 pub const call_flag_opaque: u32 = 1 << 0;
 
 const SparseConfig = struct {
@@ -79,11 +80,7 @@ pub const GpuFineTask = extern struct {
     x: u32 = 0,
     y: u32 = 0,
     call_index: u32 = 0,
-    kind: u32 = 0,
-    segment_start: u32 = 0,
-    segment_count: u32 = 0,
-    strip_index: u32 = 0,
-    _pad0: u32 = 0,
+    kind_aux: u32 = 0,
 };
 
 pub const PacketStats = struct {
@@ -211,7 +208,6 @@ pub fn build(
     for (call_clip_indices) |clip_index| {
         packet.clip_indices.appendAssumeCapacity(.{ .value = clip_index });
     }
-
     for (calls) |call| {
         packet.calls.appendAssumeCapacity(packCall(fill_rule, call, segments));
     }
@@ -249,10 +245,7 @@ pub fn build(
                 .x = s.x,
                 .y = s.y,
                 .call_index = call_index,
-                .kind = task_alpha_fill,
-                .segment_start = call.segments.start,
-                .segment_count = call.segments.count,
-                .strip_index = @intCast(strip_index),
+                .kind_aux = alphaTaskAux(0),
             });
             packet.stats.alpha_fill_tasks += 1;
             if (profile) |p| {
@@ -349,6 +342,23 @@ const Crossing = struct {
     winding: i32,
 };
 
+pub fn fillTaskAux() u32 {
+    return task_fill;
+}
+
+pub fn alphaTaskAux(alpha_index: u32) u32 {
+    std.debug.assert(alpha_index < task_kind_alpha_mask);
+    return task_kind_alpha_mask | alpha_index;
+}
+
+pub fn taskIsAlpha(task: GpuFineTask) bool {
+    return (task.kind_aux & task_kind_alpha_mask) != 0;
+}
+
+pub fn taskAlphaIndex(task: GpuFineTask) u32 {
+    return task.kind_aux & ~task_kind_alpha_mask;
+}
+
 fn appendFillTasks(
     gpa: std.mem.Allocator,
     call: encode.EncodedCall,
@@ -409,7 +419,7 @@ fn appendFillTasks(
                 .x = @intCast(strip.tileOrigin(@intCast(tile_x))),
                 .y = @intCast(strip.tileOrigin(@intCast(tile_y))),
                 .call_index = call_index,
-                .kind = task_fill,
+                .kind_aux = fillTaskAux(),
             });
             stats.fill_tasks += 1;
         }
@@ -755,8 +765,8 @@ comptime {
     std.debug.assert(@offsetOf(GpuClip, "bounds") == 0);
     std.debug.assert(@offsetOf(GpuClip, "segment_start") == 16);
     std.debug.assert(@sizeOf(GpuClipIndex) == 4);
-    std.debug.assert(@sizeOf(GpuFineTask) == 32);
+    std.debug.assert(@sizeOf(GpuFineTask) == 16);
     std.debug.assert(@offsetOf(GpuFineTask, "x") == 0);
     std.debug.assert(@offsetOf(GpuFineTask, "call_index") == 8);
-    std.debug.assert(@offsetOf(GpuFineTask, "segment_start") == 16);
+    std.debug.assert(@offsetOf(GpuFineTask, "kind_aux") == 12);
 }

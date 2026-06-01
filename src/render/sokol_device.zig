@@ -556,8 +556,22 @@ pub const Device = struct {
 
         sg.applyPipeline(self.sparse_fine_pipeline);
         var encoded_dispatches: usize = 0;
-        for (packet.calls.items) |call| {
+        var call_index: usize = 0;
+        while (call_index < packet.calls.items.len) {
+            const call = packet.calls.items[call_index];
+            call_index += 1;
             if (call.task_count == 0) continue;
+            const group_task_start = call.task_start;
+            var group_task_count = call.task_count;
+            var group_end = call_index;
+            while (group_end < packet.calls.items.len) : (group_end += 1) {
+                const next = packet.calls.items[group_end];
+                if (next.task_count == 0) continue;
+                if (!canBatchSparseCall(packet.calls.items[call_index - 1 .. group_end], next, group_task_start + group_task_count)) break;
+                group_task_count += next.task_count;
+            }
+            call_index = group_end;
+
             const texture = self.sparseTextureForCall(call);
             sg.applyBindings(sparseFineBindings(
                 self.sparse_call_buffer.view,
@@ -570,13 +584,13 @@ pub const Device = struct {
                 self.path_texture_sampler,
             ));
             var task_offset: u32 = 0;
-            while (task_offset < call.task_count) {
-                const remaining = call.task_count - task_offset;
+            while (task_offset < group_task_count) {
+                const remaining = group_task_count - task_offset;
                 const chunk = @min(remaining, max_compute_dispatch_groups_per_axis);
                 const fine_params: SparseFineParams = .{
                     .surface_width = @intCast(surface_width),
                     .surface_height = @intCast(surface_height),
-                    .task_start = @intCast(call.task_start + task_offset),
+                    .task_start = @intCast(group_task_start + task_offset),
                     .task_count = @intCast(chunk),
                 };
                 sg.applyUniforms(sparse_fine_params_slot, rangeFromValue(SparseFineParams, &fine_params));
@@ -1040,6 +1054,28 @@ pub const Device = struct {
             }
         }
         return .{ .view = self.path_default_view };
+    }
+
+    fn canBatchSparseCall(group: []const gpu_fine.GpuCall, candidate: gpu_fine.GpuCall, expected_task_start: u32) bool {
+        if (candidate.task_start != expected_task_start) return false;
+        if (group.len == 0) return false;
+        if (candidate.image_id != group[0].image_id) return false;
+        if (!validBounds(candidate.bounds)) return false;
+
+        for (group) |call| {
+            if (call.task_count == 0) continue;
+            if (!validBounds(call.bounds)) return false;
+            if (boundsOverlap(call.bounds, candidate.bounds)) return false;
+        }
+        return true;
+    }
+
+    fn validBounds(bounds: [4]f32) bool {
+        return bounds[0] < bounds[2] and bounds[1] < bounds[3];
+    }
+
+    fn boundsOverlap(a: [4]f32, b: [4]f32) bool {
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3];
     }
 
     fn ensurePathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
