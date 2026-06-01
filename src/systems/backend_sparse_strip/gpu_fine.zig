@@ -433,9 +433,10 @@ fn appendAlphaTaskSegmentIndices(
     const tile_bottom = tile_top + @as(f32, @floatFromInt(strip.tile_size));
     const segment_start: usize = @intCast(call_segments.start);
     const segment_count: usize = @intCast(call_segments.count);
+    try segment_indices.ensureUnusedCapacity(gpa, segment_count);
     for (segments[segment_start..][0..segment_count], 0..) |seg, offset| {
         if (!segmentOverlapsY(seg, tile_top, tile_bottom)) continue;
-        try segment_indices.append(gpa, .{ .value = @intCast(segment_start + offset) });
+        segment_indices.appendAssumeCapacity(.{ .value = @intCast(segment_start + offset) });
     }
     return .{
         .start = @intCast(start),
@@ -540,7 +541,7 @@ fn collectCrossings(
         const delta = crossingDelta(py, seg) orelse continue;
         const x = intersectX(py, seg);
         if (have_last and x < last_x) sorted = false;
-        try crossings.append(gpa, .{
+        crossings.appendAssumeCapacity(.{
             .x = x,
             .winding = delta,
         });
