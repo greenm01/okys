@@ -48,6 +48,10 @@ enum OKYpixelFormat {
     OKY_PIXEL_FORMAT_DEPTH = 4,
 };
 
+enum OKYimageFlags {
+    OKY_IMAGE_FLAGS_NONE = 0,
+};
+
 enum OKYreadPixelsStatus {
     OKY_READ_PIXELS_OK = 1,
     OKY_READ_PIXELS_INVALID_ARGUMENT = -1,
@@ -259,8 +263,9 @@ OKYpaint okyImagePattern(OKYcontext *ctx, float ox, float oy, float ex,
 /* --- images ------------------------------------------------------------ */
 int okyCreateImageRGBA(OKYcontext *ctx, int w, int h,
                        const unsigned char *data);
-int okyCreateImageMem(OKYcontext *ctx, const unsigned char *data, int ndata);
-int okyCreateImage(OKYcontext *ctx, const char *filename);
+int okyCreateImageRGBAEx(OKYcontext *ctx, int w, int h,
+                         const unsigned char *data, int stride_bytes,
+                         int flags);
 void okyUpdateImage(OKYcontext *ctx, int image, const unsigned char *data);
 void okyImageSize(OKYcontext *ctx, int image, int *w, int *h);
 void okyDeleteImage(OKYcontext *ctx, int image);

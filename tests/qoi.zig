@@ -1,8 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const okys = @import("okys");
-const qoi = okys.systems.qoi;
+const qoi = @import("support/qoi.zig");
 
 const marker = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 1 };
 

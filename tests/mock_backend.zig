@@ -63,6 +63,7 @@ pub const MockBackend = struct {
     last_texture_height: u32 = 0,
     last_texture_format: TexFormat = .rgba8,
     last_texture_data_len: usize = 0,
+    last_texture_data_prefix: [16]u8 = .{0} ** 16,
     last_update_id: ImageId = .none,
     last_update_x: u32 = 0,
     last_update_y: u32 = 0,
@@ -105,6 +106,11 @@ pub const MockBackend = struct {
         self.last_texture_height = h;
         self.last_texture_format = fmt;
         self.last_texture_data_len = if (data) |bytes| bytes.len else 0;
+        self.last_texture_data_prefix = .{0} ** 16;
+        if (data) |bytes| {
+            const prefix_len = @min(bytes.len, self.last_texture_data_prefix.len);
+            @memcpy(self.last_texture_data_prefix[0..prefix_len], bytes[0..prefix_len]);
+        }
         return !self.fail_create_texture;
     }
 

@@ -311,16 +311,15 @@ export fn okyCreateImageRGBA(ctx: ?*Context, w: c_int, h: c_int, data: ?[*]const
     return @intCast(@intFromEnum(image_ops.createImageRGBA(ctx.?, width, height, bytes)));
 }
 
-export fn okyCreateImageMem(ctx: ?*Context, data: ?[*]const u8, ndata: c_int) c_int {
-    if (ctx == null or data == null or ndata <= 0) return 0;
-    const bytes = data.?[0..@intCast(ndata)];
-    return @intCast(@intFromEnum(image_ops.createImageMem(ctx.?, bytes)));
-}
+export fn okyCreateImageRGBAEx(ctx: ?*Context, w: c_int, h: c_int, data: ?[*]const u8, stride_bytes: c_int, flags: c_int) c_int {
+    if (ctx == null or w <= 0 or h <= 0 or stride_bytes < 0 or flags < 0) return 0;
 
-export fn okyCreateImage(ctx: ?*Context, filename: ?[*]const u8) c_int {
-    if (ctx == null or filename == null) return 0;
-    const path = stringSlice(filename, null);
-    return @intCast(@intFromEnum(image_ops.createImage(ctx.?, path)));
+    const width: u32 = @intCast(w);
+    const height: u32 = @intCast(h);
+    const stride: usize = @intCast(stride_bytes);
+    const len = rgbaStrideLen(width, height, stride) orelse return 0;
+    const bytes: ?[]const u8 = if (data) |ptr| ptr[0..len] else null;
+    return @intCast(@intFromEnum(image_ops.createImageRGBAEx(ctx.?, width, height, bytes, stride, @intCast(flags))));
 }
 
 export fn okyUpdateImage(ctx: ?*Context, image: c_int, data: ?[*]const u8) void {
@@ -555,6 +554,15 @@ fn imageIdFromInt(id: c_int) @import("types/image.zig").ImageId {
 
 fn rgbaLen(w: u32, h: u32) usize {
     return @as(usize, w) * @as(usize, h) * 4;
+}
+
+fn rgbaStrideLen(w: u32, h: u32, stride_bytes: usize) ?usize {
+    if (w == 0 or h == 0) return null;
+    const row_len = rgbaLen(w, 1);
+    const stride = if (stride_bytes == 0) row_len else stride_bytes;
+    if (stride < row_len) return null;
+    const offset = std.math.mul(usize, @as(usize, h - 1), stride) catch return null;
+    return std.math.add(usize, offset, row_len) catch return null;
 }
 
 fn stringSlice(string: ?[*]const u8, end: ?[*]const u8) []const u8 {

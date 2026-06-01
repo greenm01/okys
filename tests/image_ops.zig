@@ -1,21 +1,10 @@
-const std = @import("std");
-const testing = std.testing;
+const testing = @import("std").testing;
 
 const okys = @import("okys");
 const mock_backend = @import("mock_backend.zig");
 
 const Context = okys.state.context.Context;
 const image_ops = okys.ops.image;
-
-const qoi_marker = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 1 };
-const qoi_2x1 = [_]u8{
-    'q', 'o', 'i',  'f',
-    0,   0,   0,    2,
-    0,   0,   0,    1,
-    4,   0,   0xff, 255,
-    0,   0,   255,  0xff,
-    0,   255, 0,    128,
-} ++ qoi_marker;
 
 test "raw rgba image creation records table entry and backend texture" {
     var backend: mock_backend.MockBackend = .{};
@@ -52,53 +41,59 @@ test "image creation rejects invalid input and rolls back backend failure" {
     try testing.expectEqual(@as(usize, 1), backend.create_texture_calls);
 }
 
-test "QOI image memory loader decodes and creates RGBA texture" {
+test "rgba ex accepts padded decoded rows from downstream loaders" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
     ctx.installBackend(backend.interface());
 
-    const id = image_ops.createImageMem(ctx, &qoi_2x1);
+    const pixels = [_]u8{
+        1, 2,  3,  4,  5,  6,  7,  8,  99, 99, 99, 99,
+        9, 10, 11, 12, 13, 14, 15, 16, 88, 88, 88, 88,
+    };
+    const id = image_ops.createImageRGBAEx(ctx, 2, 2, &pixels, 12, 0);
 
     try testing.expect(id != .none);
     try testing.expectEqual(@as(usize, 1), backend.create_texture_calls);
     try testing.expectEqual(@as(u32, 2), backend.last_texture_width);
-    try testing.expectEqual(@as(u32, 1), backend.last_texture_height);
-    try testing.expectEqual(@as(usize, 8), backend.last_texture_data_len);
-    try testing.expectEqual([2]u32{ 2, 1 }, image_ops.imageSize(ctx, id).?);
+    try testing.expectEqual(@as(u32, 2), backend.last_texture_height);
+    try testing.expectEqual(@as(usize, 16), backend.last_texture_data_len);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        1, 2,  3,  4,  5,  6,  7,  8,
+        9, 10, 11, 12, 13, 14, 15, 16,
+    }, &backend.last_texture_data_prefix);
 }
 
-test "QOI image file loader reads and creates RGBA texture" {
+test "rgba ex can allocate an empty texture without decoded pixels" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
     ctx.installBackend(backend.interface());
 
-    const path = ".zig-cache/okys-image-loader-test.qoi";
-    try writeFile(path, &qoi_2x1);
-    defer _ = std.c.unlink(path);
-
-    const id = image_ops.createImage(ctx, path);
+    const id = image_ops.createImageRGBAEx(ctx, 2, 2, null, 0, 0);
 
     try testing.expect(id != .none);
     try testing.expectEqual(@as(usize, 1), backend.create_texture_calls);
     try testing.expectEqual(@as(u32, 2), backend.last_texture_width);
-    try testing.expectEqual(@as(u32, 1), backend.last_texture_height);
+    try testing.expectEqual(@as(u32, 2), backend.last_texture_height);
+    try testing.expectEqual(@as(usize, 0), backend.last_texture_data_len);
 }
 
-test "QOI image helpers reject invalid data and missing backends" {
+test "rgba ex rejects invalid decoded pixel layout" {
     var backend: mock_backend.MockBackend = .{};
     const ctx = try Context.create(testing.allocator, 0);
     defer ctx.destroy();
     ctx.installBackend(backend.interface());
 
-    const bad = [_]u8{ 'n', 'o', 'p', 'e' };
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImageMem(ctx, &bad)));
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImage(ctx, ".zig-cache/no-such-okys-image.qoi")));
+    const too_short = [_]u8{ 1, 2, 3, 4 };
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImageRGBAEx(ctx, 2, 2, &too_short, 8, 0)));
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImageRGBAEx(ctx, 2, 2, &too_short, 4, 0)));
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImageRGBAEx(ctx, 2, 2, &too_short, 8, 1)));
 
     const no_backend = try Context.create(testing.allocator, 0);
     defer no_backend.destroy();
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImageMem(no_backend, &qoi_2x1)));
+    const pixels = [_]u8{ 255, 255, 255, 255 } ** 4;
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(image_ops.createImageRGBAEx(no_backend, 2, 2, &pixels, 0, 0)));
 }
 
 test "image update delete and size route through backend and table" {
@@ -155,10 +150,4 @@ test "image operations are no-ops without a backend" {
     image_ops.updateImage(ctx, @enumFromInt(99), &pixels);
     image_ops.deleteImage(ctx, @enumFromInt(99));
     try testing.expect(image_ops.imageSize(ctx, @enumFromInt(99)) == null);
-}
-
-fn writeFile(path: [*:0]const u8, data: []const u8) !void {
-    const file = std.c.fopen(path, "wb") orelse return error.FileOpenFailed;
-    defer _ = std.c.fclose(file);
-    if (std.c.fwrite(data.ptr, 1, data.len, file) != data.len) return error.FileWriteFailed;
 }

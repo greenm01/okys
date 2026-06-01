@@ -1,5 +1,6 @@
-//! QOI image decoder for optional image helpers. It outputs RGBA8 bytes owned
-//! by the caller's allocator.
+//! Test-support QOI decoder. Codecs intentionally stay out of the okys core;
+//! this keeps deterministic image fixtures available without adding a public
+//! loader surface.
 
 const std = @import("std");
 

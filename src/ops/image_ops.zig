@@ -6,9 +6,8 @@ const Context = @import("../state/context.zig").Context;
 const image = @import("../types/image.zig");
 const ImageId = image.ImageId;
 const TexFormat = image.TexFormat;
-const qoi = @import("../systems/qoi.zig");
 
-const max_image_file_bytes = 64 * 1024 * 1024;
+const image_flags_none = 0;
 
 pub fn createImageRGBA(ctx: *Context, w: u32, h: u32, data: ?[]const u8) ImageId {
     if (w == 0 or h == 0) {
@@ -31,17 +30,47 @@ pub fn createImageRGBA(ctx: *Context, w: u32, h: u32, data: ?[]const u8) ImageId
     return id;
 }
 
-pub fn createImageMem(ctx: *Context, data: []const u8) ImageId {
-    var decoded = qoi.decode(ctx.gpa, data) catch return .none;
-    defer decoded.deinit(ctx.gpa);
-    return createImageRGBA(ctx, decoded.width, decoded.height, decoded.rgba);
-}
+pub fn createImageRGBAEx(ctx: *Context, w: u32, h: u32, data: ?[]const u8, stride_bytes: usize, flags: u32) ImageId {
+    if (flags != image_flags_none) {
+        ctx.recordDiagnostic(.invalid_image_data);
+        return .none;
+    }
+    if (w == 0 or h == 0) {
+        ctx.recordDiagnostic(.invalid_image_data);
+        return .none;
+    }
 
-pub fn createImage(ctx: *Context, filename: []const u8) ImageId {
-    if (filename.len == 0) return .none;
-    const data = readImageFile(ctx.gpa, filename) catch return .none;
-    defer ctx.gpa.free(data);
-    return createImageMem(ctx, data);
+    const row_len = byteLen(w, 1, .rgba8);
+    const tight_len = byteLen(w, h, .rgba8);
+    const stride = if (stride_bytes == 0) row_len else stride_bytes;
+    if (stride < row_len) {
+        ctx.recordDiagnostic(.invalid_image_data);
+        return .none;
+    }
+
+    const bytes = data orelse return createImageRGBA(ctx, w, h, null);
+    const required_len = requiredStrideLen(row_len, h, stride) orelse {
+        ctx.recordDiagnostic(.invalid_image_data);
+        return .none;
+    };
+    if (bytes.len < required_len) {
+        ctx.recordDiagnostic(.invalid_image_data);
+        return .none;
+    }
+
+    if (stride == row_len) {
+        return createImageRGBA(ctx, w, h, bytes[0..tight_len]);
+    }
+
+    const tight = ctx.gpa.alloc(u8, tight_len) catch return .none;
+    defer ctx.gpa.free(tight);
+    var row: u32 = 0;
+    while (row < h) : (row += 1) {
+        const src = @as(usize, row) * stride;
+        const dst = @as(usize, row) * row_len;
+        @memcpy(tight[dst..][0..row_len], bytes[src..][0..row_len]);
+    }
+    return createImageRGBA(ctx, w, h, tight);
 }
 
 pub fn updateImage(ctx: *Context, id: ImageId, data: []const u8) void {
@@ -113,23 +142,9 @@ fn byteLen(w: u32, h: u32, format: TexFormat) usize {
     };
 }
 
-fn readImageFile(gpa: std.mem.Allocator, filename: []const u8) ![]u8 {
-    const filename_z = try gpa.dupeZ(u8, filename);
-    defer gpa.free(filename_z);
-
-    const file = std.c.fopen(filename_z, "rb") orelse return error.FileNotFound;
-    defer _ = std.c.fclose(file);
-
-    var bytes: std.ArrayList(u8) = .empty;
-    errdefer bytes.deinit(gpa);
-
-    var buf: [16 * 1024]u8 = undefined;
-    while (true) {
-        const read_count = std.c.fread(&buf, 1, buf.len, file);
-        if (read_count == 0) break;
-        if (bytes.items.len + read_count > max_image_file_bytes) return error.FileTooBig;
-        try bytes.appendSlice(gpa, buf[0..read_count]);
-        if (read_count < buf.len) break;
-    }
-    return try bytes.toOwnedSlice(gpa);
+fn requiredStrideLen(row_len: usize, h: u32, stride: usize) ?usize {
+    if (h == 0) return null;
+    const skipped_rows = @as(usize, h - 1);
+    const offset = std.math.mul(usize, skipped_rows, stride) catch return null;
+    return std.math.add(usize, offset, row_len) catch return null;
 }

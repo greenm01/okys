@@ -65,7 +65,6 @@ test "all production modules analyze" {
     _ = okys.systems.flatten;
     _ = okys.systems.stroke;
     _ = okys.systems.convex;
-    _ = okys.systems.qoi;
     _ = okys.systems.backend_stencil;
     _ = okys.systems.backend_stencil.draw_plan;
     _ = okys.systems.backend_stencil.replay;
