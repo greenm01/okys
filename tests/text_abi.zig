@@ -28,6 +28,26 @@ test "text advances over utf8 codepoint starts and stops at newline" {
     try testing.expectApproxEqAbs(@as(f32, 34), advanced, 0.001);
 }
 
+test "text bounds measure fallback text without drawing" {
+    const ctx = try Context.create(testing.allocator, 0);
+    defer ctx.destroy();
+
+    const bytes = "AéB\nhidden";
+    var bounds: [4]f32 = undefined;
+    const width = text_ops.textBounds(ctx, 10, 20, bytes, &bounds);
+
+    try testing.expectApproxEqAbs(@as(f32, 24), width, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 10), bounds[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 7.2), bounds[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 34), bounds[2], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 23.2), bounds[3], 0.001);
+}
+
+test "text bounds accepts null output and returns measured width" {
+    const width = text_ops.textBounds(null, 10, 20, "abcd", null);
+    try testing.expectApproxEqAbs(@as(f32, 32), width, 0.001);
+}
+
 test "glyph positions report byte pointers and fallback bounds" {
     const bytes = "AéB";
     var positions: [4]text_ops.TextGlyphPosition = undefined;
@@ -104,6 +124,12 @@ test "font loading uses Tatfi metrics and glyph advances" {
     const advanced = text_ops.text(ctx, 10, 20, "ABC");
     try testing.expect(advanced > 40);
 
+    var bounds: [4]f32 = undefined;
+    const measured = text_ops.textBounds(ctx, 10, 20, "ABC", &bounds);
+    try testing.expectApproxEqAbs(advanced - 10, measured, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 10), bounds[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 10) + measured, bounds[2], 0.001);
+
     var positions: [4]text_ops.TextGlyphPosition = undefined;
     const count = text_ops.glyphPositions(ctx, 0, "ABC", &positions);
     try testing.expectEqual(@as(c_int, 3), count);
@@ -128,7 +154,9 @@ test "Tatfi kern pairs feed text layout" {
     const width_a = text_ops.text(ctx, 0, 0, "A");
     const width_v = text_ops.text(ctx, 0, 0, "V");
     const width_av = text_ops.text(ctx, 0, 0, "AV");
+    const bounds_av = text_ops.textBounds(ctx, 0, 0, "AV", null);
     try testing.expectApproxEqAbs(width_a + width_v + kern, width_av, 0.001);
+    try testing.expectApproxEqAbs(width_av, bounds_av, 0.001);
     try testing.expect(width_av < width_a + width_v);
 
     var positions: [2]text_ops.TextGlyphPosition = undefined;

@@ -134,6 +134,15 @@ int main(void) {
 
     float tx = okyText(ctx, 10.0f, 20.0f, sample, sample + 3);
     assert(tx > 33.9f && tx < 34.1f);
+    float text_bounds[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float measured = okyTextBounds(ctx, 10.0f, 20.0f, sample, sample + 3,
+                                   text_bounds);
+    assert(measured > 23.9f && measured < 24.1f);
+    assert(text_bounds[0] > 9.9f && text_bounds[0] < 10.1f);
+    assert(text_bounds[1] > 7.1f && text_bounds[1] < 7.3f);
+    assert(text_bounds[2] > 33.9f && text_bounds[2] < 34.1f);
+    assert(text_bounds[3] > 23.1f && text_bounds[3] < 23.3f);
+    assert(okyTextBounds(ctx, 0.0f, 0.0f, sample, sample + 3, NULL) > 23.9f);
     okyTextBox(ctx, 0.0f, 0.0f, 56.0f, sample, NULL);
 
     float ascender = 0.0f;

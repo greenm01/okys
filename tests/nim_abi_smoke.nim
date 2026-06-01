@@ -124,6 +124,7 @@ proc okyTextLetterSpacing(ctx: ptr OKYcontext; spacing: cfloat) {.importc, heade
 proc okyTextLineHeight(ctx: ptr OKYcontext; lineHeight: cfloat) {.importc, header: "okys.h".}
 proc okyText(ctx: ptr OKYcontext; x, y: cfloat; str: cstring; `end`: cstring): cfloat {.importc, header: "okys.h".}
 proc okyTextBox(ctx: ptr OKYcontext; x, y, breakRowWidth: cfloat; str: cstring; `end`: cstring) {.importc, header: "okys.h".}
+proc okyTextBounds(ctx: ptr OKYcontext; x, y: cfloat; str: cstring; `end`: cstring; bounds: ptr cfloat): cfloat {.importc, header: "okys.h".}
 proc okyTextGlyphPositions(ctx: ptr OKYcontext; x, y: cfloat; str: cstring; `end`: cstring; positions: ptr OKYglyphPosition; maxPositions: cint): cint {.importc, header: "okys.h".}
 proc okyTextMetrics(ctx: ptr OKYcontext; ascender, descender, lineh: ptr cfloat) {.importc, header: "okys.h".}
 proc okyTextBreakLines(ctx: ptr OKYcontext; str: cstring; `end`: cstring; breakRowWidth: cfloat; rows: ptr OKYtextRow; maxRows: cint): cint {.importc, header: "okys.h".}
@@ -239,6 +240,13 @@ okyTextLineHeight(ctx, 1.0)
 
 let xAdv = okyText(ctx, 10.0, 20.0, "hello", nil)
 doAssert xAdv > 10.0
+
+var textBounds: array[4, cfloat]
+let measured = okyTextBounds(ctx, 10.0, 20.0, "hello", nil, addr textBounds[0])
+doAssert measured > 10.0
+doAssert near(textBounds[0], 10.0)
+doAssert textBounds[2] > textBounds[0]
+doAssert near(okyTextBounds(ctx, 0.0, 0.0, "hello", nil, nil), measured)
 
 okyTextBox(ctx, 10.0, 20.0, 200.0, "wrap this text", nil)
 
