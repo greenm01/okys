@@ -11,7 +11,10 @@ const Transform = color.Transform;
 const draw_state = @import("state/draw_state.zig");
 const LineCap = draw_state.LineCap;
 const LineJoin = draw_state.LineJoin;
-const Winding = @import("types/path.zig").Winding;
+const path_types = @import("types/path.zig");
+const Vertex = path_types.Vertex;
+const Winding = path_types.Winding;
+const xforms = @import("systems/transform.zig");
 
 const frame = @import("ops/frame_ops.zig");
 const image_ops = @import("ops/image_ops.zig");
@@ -337,6 +340,35 @@ export fn okyUpdateImage(ctx: ?*Context, image: c_int, data: ?[*]const u8) void 
     const size = image_ops.imageSize(ctx.?, id) orelse return;
     const len = rgbaLen(size[0], size[1]);
     image_ops.updateImage(ctx.?, id, data.?[0..len]);
+}
+
+export fn okyDrawImage(ctx: ?*Context, x: f32, y: f32, w: f32, h: f32, image: c_int, alpha: f32) void {
+    const c = ctx orelse return;
+    if (image <= 0 or w == 0 or h == 0) return;
+    const backend = c.backend orelse return;
+    const id = imageIdFromInt(image);
+    const size = image_ops.imageSize(c, id) orelse return;
+    if (size[0] == 0 or size[1] == 0) return;
+
+    const src_w: f32 = @floatFromInt(size[0]);
+    const src_h: f32 = @floatFromInt(size[1]);
+    var image_paint = paint.imagePattern(c, 0, 0, src_w, src_h, 0, image, alpha);
+    image_paint.xform = .{ w / src_w, 0, 0, h / src_h, x, y };
+    xforms.multiply(&image_paint.xform, &c.state().xform);
+
+    const p00 = xforms.point(&image_paint.xform, 0, 0);
+    const p10 = xforms.point(&image_paint.xform, src_w, 0);
+    const p11 = xforms.point(&image_paint.xform, src_w, src_h);
+    const p01 = xforms.point(&image_paint.xform, 0, src_h);
+    const verts = [_]Vertex{
+        .{ .x = p00[0], .y = p00[1], .u = 0, .v = 0 },
+        .{ .x = p10[0], .y = p10[1], .u = 1, .v = 0 },
+        .{ .x = p11[0], .y = p11[1], .u = 1, .v = 1 },
+        .{ .x = p00[0], .y = p00[1], .u = 0, .v = 0 },
+        .{ .x = p11[0], .y = p11[1], .u = 1, .v = 1 },
+        .{ .x = p01[0], .y = p01[1], .u = 0, .v = 1 },
+    };
+    backend.triangles(backend.ctx, &image_paint, &c.state().scissor, &verts);
 }
 
 export fn okyImageSize(ctx: ?*Context, image: c_int, w: ?*c_int, h: ?*c_int) void {

@@ -273,6 +273,8 @@ int okyCreateImageRGBAEx(OKYcontext *ctx, int w, int h,
                          const unsigned char *data, int stride_bytes,
                          int flags);
 void okyUpdateImage(OKYcontext *ctx, int image, const unsigned char *data);
+void okyDrawImage(OKYcontext *ctx, float x, float y, float w, float h,
+                  int image, float alpha);
 void okyImageSize(OKYcontext *ctx, int image, int *w, int *h);
 void okyDeleteImage(OKYcontext *ctx, int image);
 

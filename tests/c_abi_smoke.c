@@ -94,6 +94,7 @@ int main(void) {
     okyImageSize(ctx, image, &image_w, &image_h);
     assert(image_w == 0 && image_h == 0);
     okyUpdateImage(ctx, image, pixels);
+    okyDrawImage(ctx, 10.0f, 20.0f, 30.0f, 40.0f, image, 1.0f);
     okyDeleteImage(ctx, image);
 
     okyScissor(ctx, 0.0f, 0.0f, 200.0f, 200.0f);

@@ -89,6 +89,7 @@ proc okyImagePattern(ctx: ptr OKYcontext; ox, oy, ex, ey, angle: cfloat; image: 
 proc okyCreateImageRGBA(ctx: ptr OKYcontext; w, h: cint; data: ptr uint8): cint {.importc, header: "okys.h".}
 proc okyCreateImageRGBAEx(ctx: ptr OKYcontext; w, h: cint; data: ptr uint8; strideBytes, flags: cint): cint {.importc, header: "okys.h".}
 proc okyUpdateImage(ctx: ptr OKYcontext; image: cint; data: ptr uint8) {.importc, header: "okys.h".}
+proc okyDrawImage(ctx: ptr OKYcontext; x, y, w, h: cfloat; image: cint; alpha: cfloat) {.importc, header: "okys.h".}
 proc okyImageSize(ctx: ptr OKYcontext; image: cint; w, h: ptr cint) {.importc, header: "okys.h".}
 proc okyDeleteImage(ctx: ptr OKYcontext; image: cint) {.importc, header: "okys.h".}
 
@@ -203,6 +204,7 @@ var imageH: cint = 456
 okyImageSize(ctx, image, addr imageW, addr imageH)
 doAssert imageW == 0 and imageH == 0
 okyUpdateImage(ctx, image, addr pixels[0])
+okyDrawImage(ctx, 10.0, 20.0, 30.0, 40.0, image, 1.0)
 okyDeleteImage(ctx, image)
 
 okyScissor(ctx, 0.0, 0.0, 200.0, 200.0)
