@@ -690,38 +690,138 @@ fn appendFillTasks(
         var span_start_x: i32 = 0;
         var span_count: u32 = 0;
         const emit_start = profileStart(profile);
-        while (tile_x <= tile_x_end) : (tile_x += 1) {
+        while (tile_x <= tile_x_end) {
             const sample_x = @as(f32, @floatFromInt(tile_x)) * tile_size_f + 0.5;
             while (crossing_index < row_crossings.crossings.len and row_crossings.crossings[crossing_index].x <= sample_x) : (crossing_index += 1) {
                 winding -= row_crossings.crossings[crossing_index].winding;
             }
+            const next_tile_x = if (crossing_index < row_crossings.crossings.len)
+                @min(tile_x_end + 1, @max(tile_x + 1, crossingTileCoord(row_crossings.crossings[crossing_index].x)))
+            else
+                tile_x_end + 1;
             if (!filled(fill_rule, winding)) {
                 appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
+                tile_x = next_tile_x;
                 continue;
             }
-            if (profile) |p| p.fill_candidates += 1;
-            if (profile) |p| p.boundary_checks += 1;
-            if (containsBoundaryTile(scratch, width_tiles, tile_x, tile_y)) {
-                if (profile) |p| p.boundary_hits += 1;
-                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
-                continue;
+            const filled_tiles: usize = @intCast(next_tile_x - tile_x);
+            if (profile) |p| {
+                p.fill_candidates += filled_tiles;
+                p.boundary_checks += filled_tiles;
             }
-            if (span_count == 0) {
-                span_start_x = tile_x;
-                span_count = 1;
-            } else if (tile_x == span_start_x + @as(i32, @intCast(span_count)) and span_count < SparseConfig.max_fill_span_tiles) {
-                span_count += 1;
-            } else {
-                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
-                span_start_x = tile_x;
-                span_count = 1;
-            }
-            if (span_count == SparseConfig.max_fill_span_tiles) {
-                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
-            }
+            appendFillIntervalSkippingBoundary(
+                tasks,
+                stats,
+                profile,
+                call_index,
+                scratch,
+                width_tiles,
+                tile_y,
+                tile_x,
+                next_tile_x,
+                &span_start_x,
+                &span_count,
+            );
+            tile_x = next_tile_x;
         }
         appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
         if (profile) |p| p.fill_emit_ns += elapsedSince(emit_start);
+    }
+}
+
+fn appendFillIntervalSkippingBoundary(
+    tasks: *std.ArrayList(GpuFineTask),
+    stats: *PacketStats,
+    profile: ?*Profile,
+    call_index: u32,
+    scratch: *const Scratch,
+    width_tiles: usize,
+    tile_y: i32,
+    start_x: i32,
+    end_x: i32,
+    span_start_x: *i32,
+    span_count: *u32,
+) void {
+    var tile_x = start_x;
+    const row_bit_base = @as(usize, @intCast(tile_y)) * width_tiles;
+    while (tile_x < end_x) {
+        const bit_index = row_bit_base + @as(usize, @intCast(tile_x));
+        const word_index = bit_index >> 6;
+        const bit_offset = bit_index & 63;
+        const word_room: i32 = @intCast(64 - bit_offset);
+        const word_end_x = @min(end_x, tile_x + word_room);
+        const bit_count: u32 = @intCast(word_end_x - tile_x);
+        const boundary_bits = (scratch.boundary_words[word_index] >> @intCast(bit_offset)) & lowBitMask(bit_count);
+
+        if (boundary_bits == 0) {
+            appendFillRun(tasks, stats, call_index, tile_y, tile_x, word_end_x, span_start_x, span_count);
+            tile_x = word_end_x;
+            continue;
+        }
+
+        var local_bit: u32 = 0;
+        while (local_bit < bit_count) {
+            const bit = @as(u64, 1) << @intCast(local_bit);
+            if ((boundary_bits & bit) != 0) {
+                appendPendingFillSpan(tasks, stats, call_index, span_start_x.*, tile_y, span_count);
+                if (profile) |p| p.boundary_hits += 1;
+                local_bit += 1;
+                continue;
+            }
+
+            const shifted_boundary = boundary_bits >> @intCast(local_bit);
+            const remaining = bit_count - local_bit;
+            const run_len: u32 = if (shifted_boundary == 0)
+                remaining
+            else
+                @min(@as(u32, @intCast(@ctz(shifted_boundary))), remaining);
+            const run_start = tile_x + @as(i32, @intCast(local_bit));
+            appendFillRun(
+                tasks,
+                stats,
+                call_index,
+                tile_y,
+                run_start,
+                run_start + @as(i32, @intCast(run_len)),
+                span_start_x,
+                span_count,
+            );
+            local_bit += run_len;
+        }
+
+        tile_x = word_end_x;
+    }
+}
+
+fn appendFillRun(
+    tasks: *std.ArrayList(GpuFineTask),
+    stats: *PacketStats,
+    call_index: u32,
+    tile_y: i32,
+    start_x: i32,
+    end_x: i32,
+    span_start_x: *i32,
+    span_count: *u32,
+) void {
+    var tile_x = start_x;
+    while (tile_x < end_x) {
+        if (span_count.* == 0) {
+            span_start_x.* = tile_x;
+            const take = @min(@as(u32, @intCast(end_x - tile_x)), SparseConfig.max_fill_span_tiles);
+            span_count.* = take;
+            tile_x += @intCast(take);
+        } else if (tile_x == span_start_x.* + @as(i32, @intCast(span_count.*)) and span_count.* < SparseConfig.max_fill_span_tiles) {
+            const take = @min(@as(u32, @intCast(end_x - tile_x)), SparseConfig.max_fill_span_tiles - span_count.*);
+            span_count.* += take;
+            tile_x += @intCast(take);
+        } else {
+            appendPendingFillSpan(tasks, stats, call_index, span_start_x.*, tile_y, span_count);
+            continue;
+        }
+
+        if (span_count.* == SparseConfig.max_fill_span_tiles) {
+            appendPendingFillSpan(tasks, stats, call_index, span_start_x.*, tile_y, span_count);
+        }
     }
 }
 
@@ -754,6 +854,16 @@ fn fillTaskCapacityForBounds(bounds: [4]f32, width: u32, height: u32) usize {
     const tile_y_end = std.math.clamp(strip.tileCoord(bounds[3] - 0.001), 0, max_tile_y);
     if (tile_x > tile_x_end or tile_y > tile_y_end) return 0;
     return @as(usize, @intCast(tile_x_end - tile_x + 1)) * @as(usize, @intCast(tile_y_end - tile_y + 1));
+}
+
+fn crossingTileCoord(x: f32) i32 {
+    const tile_size_f: f32 = @floatFromInt(strip.tile_size);
+    return @intFromFloat(@ceil((x - 0.5) / tile_size_f));
+}
+
+fn lowBitMask(bit_count: u32) u64 {
+    if (bit_count >= 64) return std.math.maxInt(u64);
+    return (@as(u64, 1) << @intCast(bit_count)) - 1;
 }
 
 fn sortCrossingsIfNeeded(crossings: []Crossing, already_sorted: bool) bool {
@@ -978,15 +1088,6 @@ fn markBoundaryStrips(
     }
 }
 
-fn containsBoundaryTile(scratch: *const Scratch, width_tiles: usize, tile_x: i32, tile_y: i32) bool {
-    const x: usize = @intCast(tile_x);
-    const y: usize = @intCast(tile_y);
-    const bit_index = y * width_tiles + x;
-    const word = scratch.boundary_words[bit_index >> 6];
-    const mask = @as(u64, 1) << @intCast(bit_index & 63);
-    return (word & mask) != 0;
-}
-
 fn tileCountForPixels(pixels: u32) usize {
     return (@as(usize, pixels) + SparseConfig.tile_size - 1) / SparseConfig.tile_size;
 }
@@ -1142,6 +1243,62 @@ test "sparse GPU active rows cache fill crossings" {
 
     const edge_row = rows.crossingsForTileOrigin(12);
     try testing.expectEqual(@as(usize, 0), edge_row.crossings.len);
+}
+
+test "sparse GPU fill interval skips boundary bits and emits compact spans" {
+    const testing = std.testing;
+    var scratch: Scratch = .{};
+    defer scratch.deinit(testing.allocator);
+
+    const width_tiles: usize = 12;
+    const tile_y: i32 = 1;
+    try scratch.ensureBoundaryWords(testing.allocator, wordCountForBits(width_tiles * 2));
+    for ([_]usize{ 3, 6 }) |x| {
+        const bit_index = @as(usize, @intCast(tile_y)) * width_tiles + x;
+        scratch.boundary_words[bit_index >> 6] |= @as(u64, 1) << @intCast(bit_index & 63);
+    }
+
+    var tasks: std.ArrayList(GpuFineTask) = .empty;
+    defer tasks.deinit(testing.allocator);
+    try tasks.ensureTotalCapacity(testing.allocator, 4);
+    var stats: PacketStats = .{};
+    var profile: Profile = .{};
+    var span_start_x: i32 = 0;
+    var span_count: u32 = 0;
+
+    appendFillIntervalSkippingBoundary(
+        &tasks,
+        &stats,
+        &profile,
+        7,
+        &scratch,
+        width_tiles,
+        tile_y,
+        1,
+        8,
+        &span_start_x,
+        &span_count,
+    );
+    appendPendingFillSpan(&tasks, &stats, 7, span_start_x, tile_y, &span_count);
+
+    try testing.expectEqual(@as(usize, 3), tasks.items.len);
+    try testing.expectEqual(@as(usize, 3), stats.fill_tasks);
+    try testing.expectEqual(@as(usize, 2), profile.boundary_hits);
+
+    const first = taskCoord(tasks.items[0]);
+    try testing.expectEqual(@as(u32, 4), first.x);
+    try testing.expectEqual(@as(u32, 4), first.y);
+    try testing.expectEqual(@as(u32, 2), taskFillTileCount(tasks.items[0]));
+
+    const second = taskCoord(tasks.items[1]);
+    try testing.expectEqual(@as(u32, 16), second.x);
+    try testing.expectEqual(@as(u32, 4), second.y);
+    try testing.expectEqual(@as(u32, 2), taskFillTileCount(tasks.items[1]));
+
+    const third = taskCoord(tasks.items[2]);
+    try testing.expectEqual(@as(u32, 28), third.x);
+    try testing.expectEqual(@as(u32, 4), third.y);
+    try testing.expectEqual(@as(u32, 1), taskFillTileCount(tasks.items[2]));
 }
 
 comptime {
