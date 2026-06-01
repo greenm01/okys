@@ -208,6 +208,27 @@ int okySetupGraphics(OKYcontext *ctx, const OKYgraphicsDesc *desc);
 int okySetRenderTarget(OKYcontext *ctx, const OKYrenderTarget *target);
 int okyReadPixels(OKYcontext *ctx, const OKYreadPixelsDesc *desc);
 int okySetupGL(OKYcontext *ctx, int sample_count);
+int okySetupVulkan(OKYcontext *ctx, const void *vulkan_instance,
+                   const void *vulkan_physical_device,
+                   const void *vulkan_device, const void *vulkan_queue,
+                   uint32_t vulkan_queue_family_index, int color_format);
+int okySetupVulkanWithDepth(OKYcontext *ctx, const void *vulkan_instance,
+                            const void *vulkan_physical_device,
+                            const void *vulkan_device,
+                            const void *vulkan_queue,
+                            uint32_t vulkan_queue_family_index,
+                            int color_format, int depth_format);
+int okySetVulkanRenderTarget(OKYcontext *ctx, const void *render_image,
+                             const void *render_view,
+                             const void *render_finished_semaphore,
+                             const void *present_complete_semaphore,
+                             int width_px, int height_px, int color_format);
+int okySetVulkanRenderTargetWithDepth(
+    OKYcontext *ctx, const void *render_image, const void *render_view,
+    const void *depth_stencil_image, const void *depth_stencil_view,
+    const void *render_finished_semaphore,
+    const void *present_complete_semaphore, int width_px, int height_px,
+    int color_format, int depth_format);
 void okySetupWebGPU(OKYcontext *ctx, const void *wgpu_device,
                     int color_format);
 void okySetupWebGPUWithDepth(OKYcontext *ctx, const void *wgpu_device,

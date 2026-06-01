@@ -28,6 +28,16 @@ int main(void) {
     assert(okySetupGraphics(sparse_ctx, NULL) == 0);
     assert(okySetRenderTarget(NULL, NULL) == 0);
     assert(okySetupGL(NULL, 1) == 0);
+    assert(okySetupVulkan(NULL, NULL, NULL, NULL, NULL, 0,
+                          OKY_PIXEL_FORMAT_BGRA8) == 0);
+    assert(okySetupVulkanWithDepth(NULL, NULL, NULL, NULL, NULL, 0,
+                                   OKY_PIXEL_FORMAT_BGRA8,
+                                   OKY_PIXEL_FORMAT_DEPTH_STENCIL) == 0);
+    assert(okySetVulkanRenderTarget(NULL, NULL, NULL, NULL, NULL, 0, 0,
+                                    OKY_PIXEL_FORMAT_BGRA8) == 0);
+    assert(okySetVulkanRenderTargetWithDepth(
+               NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0,
+               OKY_PIXEL_FORMAT_BGRA8, OKY_PIXEL_FORMAT_DEPTH_STENCIL) == 0);
     okySetupWebGPU(NULL, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);
     okySetWebGPURenderTarget(NULL, NULL, 0, 0);
     okySetupWebGPU(sparse_ctx, NULL, OKY_WEBGPU_TEXTURE_FORMAT_BGRA8_UNORM);

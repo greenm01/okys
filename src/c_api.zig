@@ -114,6 +114,55 @@ pub export fn okySetupGL(ctx: ?*Context, sample_count: c_int) c_int {
     return okySetupGraphics(ctx, &desc);
 }
 
+pub export fn okySetupVulkan(
+    ctx: ?*Context,
+    vulkan_instance: ?*const anyopaque,
+    vulkan_physical_device: ?*const anyopaque,
+    vulkan_device: ?*const anyopaque,
+    vulkan_queue: ?*const anyopaque,
+    vulkan_queue_family_index: u32,
+    color_format: c_int,
+) c_int {
+    return okySetupVulkanWithDepth(
+        ctx,
+        vulkan_instance,
+        vulkan_physical_device,
+        vulkan_device,
+        vulkan_queue,
+        vulkan_queue_family_index,
+        color_format,
+        @intFromEnum(PixelFormat.depth_stencil),
+    );
+}
+
+pub export fn okySetupVulkanWithDepth(
+    ctx: ?*Context,
+    vulkan_instance: ?*const anyopaque,
+    vulkan_physical_device: ?*const anyopaque,
+    vulkan_device: ?*const anyopaque,
+    vulkan_queue: ?*const anyopaque,
+    vulkan_queue_family_index: u32,
+    color_format: c_int,
+    depth_format: c_int,
+) c_int {
+    var desc: GraphicsDesc = .{
+        .backend = @intFromEnum(GraphicsBackend.vulkan),
+        .color_format = color_format,
+        .depth_format = depth_format,
+        .sample_count = 1,
+        .metal_device = null,
+        .d3d11_device = null,
+        .d3d11_device_context = null,
+        .vulkan_instance = vulkan_instance,
+        .vulkan_physical_device = vulkan_physical_device,
+        .vulkan_device = vulkan_device,
+        .vulkan_queue = vulkan_queue,
+        .vulkan_queue_family_index = vulkan_queue_family_index,
+        .webgpu_device = null,
+    };
+    return okySetupGraphics(ctx, &desc);
+}
+
 export fn okySetupWebGPU(ctx: ?*Context, wgpu_device: ?*const anyopaque, color_format: c_int) void {
     okySetupWebGPUWithDepth(ctx, wgpu_device, color_format, @intFromEnum(PixelFormat.none));
 }
@@ -174,6 +223,73 @@ export fn okySetWebGPURenderTargetWithDepth(ctx: ?*Context, color_texture_view: 
         .webgpu_depth_stencil_view = depth_stencil_texture_view,
     };
     _ = okySetRenderTarget(c, &target);
+}
+
+pub export fn okySetVulkanRenderTarget(
+    ctx: ?*Context,
+    render_image: ?*const anyopaque,
+    render_view: ?*const anyopaque,
+    render_finished_semaphore: ?*const anyopaque,
+    present_complete_semaphore: ?*const anyopaque,
+    width_px: c_int,
+    height_px: c_int,
+    color_format: c_int,
+) c_int {
+    return okySetVulkanRenderTargetWithDepth(
+        ctx,
+        render_image,
+        render_view,
+        null,
+        null,
+        render_finished_semaphore,
+        present_complete_semaphore,
+        width_px,
+        height_px,
+        color_format,
+        @intFromEnum(PixelFormat.none),
+    );
+}
+
+pub export fn okySetVulkanRenderTargetWithDepth(
+    ctx: ?*Context,
+    render_image: ?*const anyopaque,
+    render_view: ?*const anyopaque,
+    depth_stencil_image: ?*const anyopaque,
+    depth_stencil_view: ?*const anyopaque,
+    render_finished_semaphore: ?*const anyopaque,
+    present_complete_semaphore: ?*const anyopaque,
+    width_px: c_int,
+    height_px: c_int,
+    color_format: c_int,
+    depth_format: c_int,
+) c_int {
+    var target: RenderTarget = .{
+        .backend = @intFromEnum(GraphicsBackend.vulkan),
+        .width_px = width_px,
+        .height_px = height_px,
+        .color_format = color_format,
+        .depth_format = depth_format,
+        .sample_count = 1,
+        .gl_framebuffer = 0,
+        .metal_current_drawable = null,
+        .metal_depth_stencil_texture = null,
+        .metal_msaa_color_texture = null,
+        .d3d11_render_view = null,
+        .d3d11_resolve_view = null,
+        .d3d11_depth_stencil_view = null,
+        .vulkan_render_image = render_image,
+        .vulkan_render_view = render_view,
+        .vulkan_resolve_image = null,
+        .vulkan_resolve_view = null,
+        .vulkan_depth_stencil_image = if (depth_format == @intFromEnum(PixelFormat.none)) null else depth_stencil_image,
+        .vulkan_depth_stencil_view = if (depth_format == @intFromEnum(PixelFormat.none)) null else depth_stencil_view,
+        .vulkan_render_finished_semaphore = render_finished_semaphore,
+        .vulkan_present_complete_semaphore = present_complete_semaphore,
+        .webgpu_render_view = null,
+        .webgpu_resolve_view = null,
+        .webgpu_depth_stencil_view = null,
+    };
+    return okySetRenderTarget(ctx, &target);
 }
 
 // --- state stack -----------------------------------------------------------
