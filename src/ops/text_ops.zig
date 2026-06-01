@@ -203,6 +203,21 @@ pub fn textMetrics(ctx: ?*const Context) struct { ascender: f32, descender: f32,
     };
 }
 
+/// Measure-only: returns the horizontal advance of `bytes` without drawing.
+/// Uses the same per-glyph advance + kerning path as `text`, so the measured
+/// width matches the drawn run. Optionally fills `bounds` = {minx, miny, maxx, maxy}.
+pub fn textBounds(ctx: ?*const Context, x: f32, y: f32, bytes: []const u8, bounds: ?*[4]f32) f32 {
+    const width = textWidthFor(ctx, bytes);
+    if (bounds) |b| {
+        const m = textMetrics(ctx);
+        b[0] = x;
+        b[1] = y - m.ascender;
+        b[2] = x + width;
+        b[3] = y - m.descender;
+    }
+    return width;
+}
+
 pub fn glyphPositions(ctx: ?*const Context, x: f32, bytes: []const u8, positions: []TextGlyphPosition) c_int {
     var count: usize = 0;
     var i: usize = 0;

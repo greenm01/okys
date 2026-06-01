@@ -197,7 +197,10 @@ pub const FontStore = struct {
     }
 
     fn createFontOwned(self: *FontStore, gpa: std.mem.Allocator, name: []const u8, data: []u8) !i32 {
-        _ = try tatfi.Face.parse(data, 0);
+        // Parse the face once and cache it. tatfi.Face holds slices into `data`
+        // (heap-stable for the record's lifetime), so re-parsing per metric
+        // lookup is pure waste — it was costing a full font parse per glyph.
+        const parsed = try tatfi.Face.parse(data, 0);
 
         const owned_name = try gpa.dupe(u8, name);
         errdefer gpa.free(owned_name);
@@ -208,6 +211,7 @@ pub const FontStore = struct {
             .id = id,
             .name = owned_name,
             .data = data,
+            .parsed = parsed,
         });
         return id;
     }
@@ -391,6 +395,7 @@ const FontRecord = struct {
     id: i32,
     name: []u8,
     data: []u8,
+    parsed: tatfi.Face,
 
     fn deinit(self: *FontRecord, gpa: std.mem.Allocator) void {
         gpa.free(self.name);
@@ -399,7 +404,7 @@ const FontRecord = struct {
     }
 
     fn face(self: *const FontRecord) ?tatfi.Face {
-        return tatfi.Face.parse(self.data, 0) catch null;
+        return self.parsed;
     }
 };
 

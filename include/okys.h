@@ -306,6 +306,8 @@ float okyText(OKYcontext *ctx, float x, float y, const char *string,
               const char *end);
 void okyTextBox(OKYcontext *ctx, float x, float y, float break_row_width,
                 const char *string, const char *end);
+float okyTextBounds(OKYcontext *ctx, float x, float y, const char *string,
+                    const char *end, float *bounds);
 int okyTextGlyphPositions(OKYcontext *ctx, float x, float y,
                           const char *string, const char *end,
                           OKYglyphPosition *positions, int max_positions);

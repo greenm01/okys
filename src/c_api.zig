@@ -466,6 +466,21 @@ export fn okyTextBox(ctx: ?*Context, x: f32, y: f32, break_row_width: f32, strin
     text_ops.textBox(ctx.?, x, y, break_row_width, bytes);
 }
 
+export fn okyTextBounds(ctx: ?*Context, x: f32, y: f32, string: ?[*]const u8, end: ?[*]const u8, bounds: ?[*]f32) f32 {
+    if (ctx == null) return 0;
+    const bytes = stringSlice(string, end);
+    if (bounds) |out| {
+        var local: [4]f32 = .{ 0, 0, 0, 0 };
+        const width = text_ops.textBounds(ctx.?, x, y, bytes, &local);
+        out[0] = local[0];
+        out[1] = local[1];
+        out[2] = local[2];
+        out[3] = local[3];
+        return width;
+    }
+    return text_ops.textBounds(ctx.?, x, y, bytes, null);
+}
+
 export fn okyTextGlyphPositions(ctx: ?*Context, x: f32, y: f32, string: ?[*]const u8, end: ?[*]const u8, positions: ?[*]TextGlyphPosition, max_positions: c_int) c_int {
     _ = y;
     if (ctx == null or positions == null or max_positions <= 0) return 0;
