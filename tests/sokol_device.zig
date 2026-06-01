@@ -213,7 +213,10 @@ test "stencil path pipelines configure nonzero and even odd stencil ops" {
 
     try testing.expectEqual(@as(@TypeOf(nonzero.primitive_type), .TRIANGLES), nonzero.primitive_type);
     try testing.expectEqual(@as(@TypeOf(nonzero.index_type), .UINT16), nonzero.index_type);
-    try testing.expectEqual(@as(@TypeOf(nonzero.colors[0].write_mask), .NONE), nonzero.colors[0].write_mask);
+    try testing.expectEqual(@as(@TypeOf(nonzero.colors[0].write_mask), .RGBA), nonzero.colors[0].write_mask);
+    try testing.expect(nonzero.colors[0].blend.enabled);
+    try testing.expectEqual(@as(@TypeOf(nonzero.colors[0].blend.src_factor_rgb), .ZERO), nonzero.colors[0].blend.src_factor_rgb);
+    try testing.expectEqual(@as(@TypeOf(nonzero.colors[0].blend.dst_factor_rgb), .ONE), nonzero.colors[0].blend.dst_factor_rgb);
     try testing.expect(nonzero.stencil.enabled);
     try testing.expectEqual(@as(@TypeOf(nonzero.stencil.front.compare), .ALWAYS), nonzero.stencil.front.compare);
     try testing.expectEqual(@as(@TypeOf(nonzero.stencil.front.pass_op), .INCR_WRAP), nonzero.stencil.front.pass_op);
@@ -222,6 +225,8 @@ test "stencil path pipelines configure nonzero and even odd stencil ops" {
     try testing.expectEqual(@as(u8, 0xff), nonzero.stencil.write_mask);
 
     try testing.expectEqual(@as(@TypeOf(even_odd.index_type), .UINT16), even_odd.index_type);
+    try testing.expectEqual(@as(@TypeOf(even_odd.colors[0].write_mask), .RGBA), even_odd.colors[0].write_mask);
+    try testing.expect(even_odd.colors[0].blend.enabled);
     try testing.expect(even_odd.stencil.enabled);
     try testing.expectEqual(@as(@TypeOf(even_odd.stencil.front.pass_op), .INVERT), even_odd.stencil.front.pass_op);
     try testing.expectEqual(@as(@TypeOf(even_odd.stencil.back.pass_op), .INVERT), even_odd.stencil.back.pass_op);

@@ -112,12 +112,16 @@ pub export fn okySetupGL(ctx: ?*Context, sample_count: c_int) c_int {
 }
 
 export fn okySetupWebGPU(ctx: ?*Context, wgpu_device: ?*const anyopaque, color_format: c_int) void {
+    okySetupWebGPUWithDepth(ctx, wgpu_device, color_format, @intFromEnum(PixelFormat.none));
+}
+
+export fn okySetupWebGPUWithDepth(ctx: ?*Context, wgpu_device: ?*const anyopaque, color_format: c_int, depth_format: c_int) void {
     const c = ctx orelse return;
     const device = wgpu_device orelse return;
     var desc: GraphicsDesc = .{
         .backend = @intFromEnum(GraphicsBackend.webgpu),
         .color_format = color_format,
-        .depth_format = @intFromEnum(PixelFormat.none),
+        .depth_format = depth_format,
         .sample_count = 1,
         .metal_device = null,
         .d3d11_device = null,
@@ -133,6 +137,10 @@ export fn okySetupWebGPU(ctx: ?*Context, wgpu_device: ?*const anyopaque, color_f
 }
 
 export fn okySetWebGPURenderTarget(ctx: ?*Context, color_texture_view: ?*const anyopaque, width_px: c_int, height_px: c_int) void {
+    okySetWebGPURenderTargetWithDepth(ctx, color_texture_view, null, width_px, height_px);
+}
+
+export fn okySetWebGPURenderTargetWithDepth(ctx: ?*Context, color_texture_view: ?*const anyopaque, depth_stencil_texture_view: ?*const anyopaque, width_px: c_int, height_px: c_int) void {
     const c = ctx orelse return;
     const view = color_texture_view orelse return;
     if (width_px <= 0 or height_px <= 0) return;
@@ -141,7 +149,7 @@ export fn okySetWebGPURenderTarget(ctx: ?*Context, color_texture_view: ?*const a
         .width_px = width_px,
         .height_px = height_px,
         .color_format = @intFromEnum(PixelFormat.none),
-        .depth_format = @intFromEnum(PixelFormat.none),
+        .depth_format = if (depth_stencil_texture_view != null) @intFromEnum(PixelFormat.depth_stencil) else @intFromEnum(PixelFormat.none),
         .sample_count = 1,
         .gl_framebuffer = 0,
         .metal_current_drawable = null,
@@ -160,7 +168,7 @@ export fn okySetWebGPURenderTarget(ctx: ?*Context, color_texture_view: ?*const a
         .vulkan_present_complete_semaphore = null,
         .webgpu_render_view = view,
         .webgpu_resolve_view = null,
-        .webgpu_depth_stencil_view = null,
+        .webgpu_depth_stencil_view = depth_stencil_texture_view,
     };
     _ = okySetRenderTarget(c, &target);
 }

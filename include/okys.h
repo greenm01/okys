@@ -210,8 +210,14 @@ int okyReadPixels(OKYcontext *ctx, const OKYreadPixelsDesc *desc);
 int okySetupGL(OKYcontext *ctx, int sample_count);
 void okySetupWebGPU(OKYcontext *ctx, const void *wgpu_device,
                     int color_format);
+void okySetupWebGPUWithDepth(OKYcontext *ctx, const void *wgpu_device,
+                             int color_format, int depth_format);
 void okySetWebGPURenderTarget(OKYcontext *ctx, const void *color_texture_view,
                               int width_px, int height_px);
+void okySetWebGPURenderTargetWithDepth(OKYcontext *ctx,
+                                       const void *color_texture_view,
+                                       const void *depth_stencil_texture_view,
+                                       int width_px, int height_px);
 
 /* --- state stack ------------------------------------------------------- */
 void okySave(OKYcontext *ctx);

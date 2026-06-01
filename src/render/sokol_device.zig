@@ -418,12 +418,12 @@ pub const Device = struct {
         sg.updateImage(self.blit_image, image_data);
 
         const vertices = blitQuad(dest);
-        sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+        const vertex_offset = sg.appendBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
 
         self.beginPass(pass);
         const params = blitVsParams(view_width, view_height);
         sg.applyPipeline(self.blit_pipeline);
-        sg.applyBindings(blitBindings(self.blit_vertices, self.blit_view, self.blit_sampler));
+        sg.applyBindings(blitBindings(self.blit_vertices, vertex_offset, self.blit_view, self.blit_sampler));
         sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
         sg.draw(0, 4, 1);
         sg.endPass();
@@ -439,12 +439,12 @@ pub const Device = struct {
     ) void {
         if (view.id == 0) return;
         self.ensureBlitResources(1, 1);
-        sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+        const vertex_offset = sg.appendBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
 
         self.beginPass(pass);
         const params = blitVsParams(view_width, view_height);
         sg.applyPipeline(self.blit_pipeline);
-        sg.applyBindings(blitBindings(self.blit_vertices, view, self.blit_sampler));
+        sg.applyBindings(blitBindings(self.blit_vertices, vertex_offset, view, self.blit_sampler));
         sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
         sg.draw(0, 4, 1);
         sg.endPass();
@@ -592,12 +592,12 @@ pub const Device = struct {
         const blit_start = nowNs();
         self.ensureBlitResources(surface_width, surface_height);
         const vertices = blitQuad(dest);
-        sg.updateBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+        const vertex_offset = sg.appendBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
 
         self.beginPass(pass);
         const params = blitVsParams(view_width, view_height);
         sg.applyPipeline(self.blit_pipeline);
-        sg.applyBindings(blitBindings(self.blit_vertices, self.sparse_surface_texture_view, self.blit_sampler));
+        sg.applyBindings(blitBindings(self.blit_vertices, vertex_offset, self.sparse_surface_texture_view, self.blit_sampler));
         sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
         sg.draw(0, 4, 1);
         sg.endPass();
@@ -1394,8 +1394,9 @@ pub fn offscreenPassWithAction(action: PassAction, color_view: View) Pass {
 }
 
 pub fn blitVertexBufferDesc() BufferDesc {
+    const max_blit_quads_per_frame = 256;
     return .{
-        .size = 4 * @sizeOf(BlitVertex),
+        .size = max_blit_quads_per_frame * 4 * @sizeOf(BlitVertex),
         .usage = .{ .vertex_buffer = true, .stream_update = true },
         .label = "okys_blit_vertices",
     };
@@ -1600,9 +1601,10 @@ pub fn blitPipelineDesc(shader: Shader) PipelineDesc {
     return desc;
 }
 
-pub fn blitBindings(vertex_buffer: Buffer, view: View, sampler: Sampler) Bindings {
+pub fn blitBindings(vertex_buffer: Buffer, vertex_offset_bytes: i32, view: View, sampler: Sampler) Bindings {
     var bindings: Bindings = .{};
     bindings.vertex_buffers[0] = vertex_buffer;
+    bindings.vertex_buffer_offsets[0] = vertex_offset_bytes;
     bindings.views[blit_view_slot] = view;
     bindings.samplers[blit_sampler_slot] = sampler;
     return bindings;
@@ -1714,14 +1716,16 @@ pub fn pathPipelineDesc(shader: Shader, kind: PathPipelineKind) PipelineDesc {
         .stencil_nonzero => {
             desc.primitive_type = .TRIANGLES;
             desc.index_type = .UINT16;
-            desc.colors[0].write_mask = .NONE;
+            desc.colors[0].write_mask = .RGBA;
+            desc.colors[0].blend = preserveDestinationBlend();
             desc.stencil = stencilState(.ALWAYS, .INCR_WRAP, .DECR_WRAP);
             desc.label = "okys_path_stencil_nonzero_pipeline";
         },
         .stencil_even_odd => {
             desc.primitive_type = .TRIANGLES;
             desc.index_type = .UINT16;
-            desc.colors[0].write_mask = .NONE;
+            desc.colors[0].write_mask = .RGBA;
+            desc.colors[0].blend = preserveDestinationBlend();
             desc.stencil = stencilState(.ALWAYS, .INVERT, .INVERT);
             desc.label = "okys_path_stencil_even_odd_pipeline";
         },
@@ -1801,6 +1805,18 @@ fn alphaBlend() sg.BlendState {
         .op_rgb = .ADD,
         .src_factor_alpha = .ONE,
         .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+        .op_alpha = .ADD,
+    };
+}
+
+fn preserveDestinationBlend() sg.BlendState {
+    return .{
+        .enabled = true,
+        .src_factor_rgb = .ZERO,
+        .dst_factor_rgb = .ONE,
+        .op_rgb = .ADD,
+        .src_factor_alpha = .ZERO,
+        .dst_factor_alpha = .ONE,
         .op_alpha = .ADD,
     };
 }
