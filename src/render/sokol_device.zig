@@ -494,6 +494,38 @@ pub const Device = struct {
     ) bool {
         _ = segments;
         const total_start = nowNs();
+        defer timing.total_ns = elapsedSince(total_start);
+
+        if (!self.drawSparseFineTextureTimed(packet, textures, surface_width, surface_height, timing)) {
+            return false;
+        }
+
+        const blit_start = nowNs();
+        self.ensureBlitResources(surface_width, surface_height);
+        const vertices = blitQuad(dest);
+        const vertex_offset = sg.appendBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
+
+        self.beginPass(pass);
+        const params = blitVsParams(view_width, view_height);
+        sg.applyPipeline(self.blit_pipeline);
+        sg.applyBindings(blitBindings(self.blit_vertices, vertex_offset, self.sparse_surface_texture_view, self.blit_sampler));
+        sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
+        sg.draw(0, 4, 1);
+        sg.endPass();
+        timing.blit_encode_ns = elapsedSince(blit_start);
+        timing.ok = true;
+        return true;
+    }
+
+    pub fn drawSparseFineTextureTimed(
+        self: *Device,
+        packet: *const gpu_fine.Packet,
+        textures: []const PathTexture,
+        surface_width: u32,
+        surface_height: u32,
+        timing: *SparseFineSubmitTiming,
+    ) bool {
+        const total_start = nowNs();
         timing.* = .{
             .calls = packet.calls.items.len,
             .tasks = packet.tasks.items.len,
@@ -608,19 +640,6 @@ pub const Device = struct {
         sg.endPass();
         timing.compute_encode_ns = elapsedSince(compute_start);
 
-        const blit_start = nowNs();
-        self.ensureBlitResources(surface_width, surface_height);
-        const vertices = blitQuad(dest);
-        const vertex_offset = sg.appendBuffer(self.blit_vertices, rangeFromSlice(BlitVertex, vertices[0..]));
-
-        self.beginPass(pass);
-        const params = blitVsParams(view_width, view_height);
-        sg.applyPipeline(self.blit_pipeline);
-        sg.applyBindings(blitBindings(self.blit_vertices, vertex_offset, self.sparse_surface_texture_view, self.blit_sampler));
-        sg.applyUniforms(blit_vs_params_slot, rangeFromValue(BlitVsParams, &params));
-        sg.draw(0, 4, 1);
-        sg.endPass();
-        timing.blit_encode_ns = elapsedSince(blit_start);
         timing.ok = true;
         return true;
     }

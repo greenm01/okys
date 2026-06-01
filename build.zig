@@ -251,6 +251,9 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_full_frame_bench_mod.addImport("okys", okys_mod);
     tiger_gpu_full_frame_bench_mod.addImport("sokol", mod_sokol);
     tiger_gpu_full_frame_bench_mod.addImport("bench_scenes", bench_scenes_mod);
+    const tiger_gpu_full_frame_options = b.addOptions();
+    tiger_gpu_full_frame_options.addOption(bool, "texture_only", false);
+    tiger_gpu_full_frame_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_full_frame_options);
     const gpu_fence_wait_mod = b.createModule(.{
         .root_source_file = b.path("tools/gpu_fence_wait.zig"),
         .target = target,
@@ -290,6 +293,49 @@ pub fn build(b: *std.Build) !void {
     const run_tiger_gpu_full_frame_bench = b.addRunArtifact(tiger_gpu_full_frame_bench);
     const tiger_gpu_full_frame_bench_step = b.step("gpu-bench-tiger-full-frame", "Run Ghostscript Tiger full-frame sparse GPU benchmark");
     tiger_gpu_full_frame_bench_step.dependOn(&run_tiger_gpu_full_frame_bench.step);
+
+    const tiger_gpu_texture_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gpu_full_frame_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    tiger_gpu_texture_bench_mod.addImport("okys", okys_mod);
+    tiger_gpu_texture_bench_mod.addImport("sokol", mod_sokol);
+    tiger_gpu_texture_bench_mod.addImport("bench_scenes", bench_scenes_mod);
+    tiger_gpu_texture_bench_mod.addImport("gpu_fence_wait", gpu_fence_wait_mod);
+    const tiger_gpu_texture_options = b.addOptions();
+    tiger_gpu_texture_options.addOption(bool, "texture_only", true);
+    tiger_gpu_texture_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_texture_options);
+    if (with_wgpu) {
+        if (webgpu_include) |include_path| {
+            tiger_gpu_texture_bench_mod.addSystemIncludePath(.{ .cwd_relative = include_path });
+        } else {
+            tiger_gpu_texture_bench_mod.addSystemIncludePath(b.path("vendor/webgpu/include"));
+        }
+        tiger_gpu_texture_bench_mod.addCSourceFile(.{
+            .file = b.path("tools/gpu_fence_wait_wgpu.c"),
+            .flags = &.{ "-std=c11", "-DOKYS_ENABLE_WGPU_FENCE=1" },
+        });
+    } else {
+        tiger_gpu_texture_bench_mod.addCSourceFile(.{
+            .file = b.path("tools/gpu_fence_wait_wgpu.c"),
+            .flags = &.{ "-std=c11", "-DOKYS_ENABLE_WGPU_FENCE=0" },
+        });
+    }
+    if (target.result.os.tag == .macos or target.result.os.tag == .ios or target.result.os.tag == .tvos or target.result.os.tag == .watchos) {
+        tiger_gpu_texture_bench_mod.addCSourceFile(.{
+            .file = b.path("tools/gpu_fence_wait_metal.m"),
+            .flags = &.{"-fobjc-arc"},
+        });
+    }
+    const tiger_gpu_texture_bench = b.addExecutable(.{
+        .name = "okys_gpu_texture_bench_tiger",
+        .root_module = tiger_gpu_texture_bench_mod,
+    });
+    const run_tiger_gpu_texture_bench = b.addRunArtifact(tiger_gpu_texture_bench);
+    const tiger_gpu_texture_bench_step = b.step("gpu-bench-tiger-texture", "Run Ghostscript Tiger sparse GPU render-to-texture benchmark");
+    tiger_gpu_texture_bench_step.dependOn(&run_tiger_gpu_texture_bench.step);
 
     const gpu_readback_smoke_mod = b.createModule(.{
         .root_source_file = b.path("tools/gpu_readback_smoke.zig"),
