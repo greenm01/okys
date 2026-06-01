@@ -45,6 +45,7 @@ pub const systems = struct {
 
 pub const render = struct {
     pub const backend_selection = @import("render/backend_selection.zig");
+    pub const draw_list = @import("render/draw_list.zig");
     pub const frame_capture = @import("render/frame_capture.zig");
     pub const interface = @import("render/interface.zig");
     pub const sokol_device = @import("render/sokol_device.zig");

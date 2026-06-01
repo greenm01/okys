@@ -15,6 +15,7 @@ const frame_capture_tests = @import("frame_capture.zig");
 const frame_profile_tests = @import("frame_profile.zig");
 const glyph_atlas_tests = @import("glyph_atlas.zig");
 const diagnostics_tests = @import("diagnostics.zig");
+const draw_list_tests = @import("draw_list.zig");
 const image_ops_tests = @import("image_ops.zig");
 const mock_backend = @import("mock_backend.zig");
 const sokol_device_tests = @import("sokol_device.zig");
@@ -75,6 +76,7 @@ test "all production modules analyze" {
     _ = okys.systems.backend_sparse_strip.gpu_fine;
     _ = okys.systems.backend_sparse_strip.strip;
     _ = okys.render.backend_selection;
+    _ = okys.render.draw_list;
     _ = okys.render.frame_capture;
     _ = okys.render.interface;
     _ = okys.render.sokol_device;
@@ -93,6 +95,7 @@ test "all production modules analyze" {
     _ = frame_profile_tests;
     _ = glyph_atlas_tests;
     _ = diagnostics_tests;
+    _ = draw_list_tests;
     _ = image_ops_tests;
     _ = mock_backend;
     _ = sokol_device_tests;
