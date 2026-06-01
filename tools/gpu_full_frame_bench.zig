@@ -33,12 +33,23 @@ const Accumulator = struct {
     gpu_crossing_collect_ns: u128 = 0,
     gpu_crossing_sort_ns: u128 = 0,
     gpu_fill_emit_ns: u128 = 0,
+    crossing_rows: u128 = 0,
+    crossing_items: u128 = 0,
+    crossing_sort_rows: u128 = 0,
+    max_crossings_per_row: usize = 0,
+    boundary_checks: u128 = 0,
+    boundary_hits: u128 = 0,
+    fill_candidates: u128 = 0,
+    alpha_segment_refs: u128 = 0,
+    max_alpha_segments_per_task: usize = 0,
     cpu_encode_ns: u128 = 0,
     commit_ns: u128 = 0,
     resource_ns: u128 = 0,
     upload_ns: u128 = 0,
     compute_encode_ns: u128 = 0,
     blit_encode_ns: u128 = 0,
+    gpu_wait_ns: u128 = 0,
+    gpu_wait_samples: usize = 0,
     calls: usize = 0,
     tasks: usize = 0,
     dispatches: usize = 0,
@@ -52,6 +63,7 @@ const Accumulator = struct {
         build_ns: u64,
         profile: okys.systems.backend_sparse_strip.Profile,
         commit_ns: u64,
+        gpu_wait_ns: ?u64,
         timing: sokol_device.SparseFineSubmitTiming,
     ) void {
         self.frame_ns += frame_ns;
@@ -68,12 +80,25 @@ const Accumulator = struct {
         self.gpu_crossing_collect_ns += profile.gpu_fine_profile.crossing_collect_ns;
         self.gpu_crossing_sort_ns += profile.gpu_fine_profile.crossing_sort_ns;
         self.gpu_fill_emit_ns += profile.gpu_fine_profile.fill_emit_ns;
+        self.crossing_rows += profile.gpu_fine_profile.crossing_rows;
+        self.crossing_items += profile.gpu_fine_profile.crossing_items;
+        self.crossing_sort_rows += profile.gpu_fine_profile.crossing_sort_rows;
+        self.max_crossings_per_row = @max(self.max_crossings_per_row, profile.gpu_fine_profile.max_crossings_per_row);
+        self.boundary_checks += profile.gpu_fine_profile.boundary_checks;
+        self.boundary_hits += profile.gpu_fine_profile.boundary_hits;
+        self.fill_candidates += profile.gpu_fine_profile.fill_candidates;
+        self.alpha_segment_refs += profile.gpu_fine_profile.alpha_segment_refs;
+        self.max_alpha_segments_per_task = @max(self.max_alpha_segments_per_task, profile.gpu_fine_profile.max_alpha_segments_per_task);
         self.cpu_encode_ns += timing.total_ns;
         self.commit_ns += commit_ns;
         self.resource_ns += timing.resource_ns;
         self.upload_ns += timing.upload_ns;
         self.compute_encode_ns += timing.compute_encode_ns;
         self.blit_encode_ns += timing.blit_encode_ns;
+        if (gpu_wait_ns) |wait_ns| {
+            self.gpu_wait_ns += wait_ns;
+            self.gpu_wait_samples += 1;
+        }
         self.calls = timing.calls;
         self.tasks = timing.tasks;
         self.dispatches = timing.dispatches;
@@ -188,10 +213,11 @@ fn frame() callconv(.c) void {
     const commit_start = nowNs();
     sokol_device.Device.commit();
     const commit_ns = nowNs() - commit_start;
+    const gpu_wait_ns = measureGpuWait();
     const frame_ns = nowNs() - frame_start;
 
     if (frame_index >= warmup_frames) {
-        accum.add(frame_ns, frontend_ns, build_ns, profile, commit_ns, timing);
+        accum.add(frame_ns, frontend_ns, build_ns, profile, commit_ns, gpu_wait_ns, timing);
     }
 
     frame_index += 1;
@@ -225,7 +251,7 @@ fn fail(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tcalls\ttasks\tdispatches\tupload_bytes\tfallback\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tcalls\ttasks\tdispatches\tupload_bytes\tfallback\n");
 }
 
 fn printResult(result: Accumulator) void {
@@ -233,9 +259,10 @@ fn printResult(result: Accumulator) void {
     const cpu_encode_avg = average(result.cpu_encode_ns);
     const commit_avg = average(result.commit_ns);
     const submit_avg = cpu_encode_avg + commit_avg;
+    const gpu_wait_avg = if (result.gpu_wait_samples > 0) @as(u64, @intCast(result.gpu_wait_ns / result.gpu_wait_samples)) else 0;
     const scene_name = "ghostscript_tiger";
     _ = std.c.printf(
-        "%.*s\tsparse_strip\tgpu_full_frame\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
+        "%.*s\tsparse_strip\tgpu_full_frame\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         u64ForPrint(measured_frames),
@@ -254,12 +281,23 @@ fn printResult(result: Accumulator) void {
         u64ForPrint(average(result.gpu_crossing_collect_ns)),
         u64ForPrint(average(result.gpu_crossing_sort_ns)),
         u64ForPrint(average(result.gpu_fill_emit_ns)),
+        u64ForPrint(average(result.crossing_rows)),
+        u64ForPrint(average(result.crossing_items)),
+        u64ForPrint(average(result.crossing_sort_rows)),
+        u64ForPrint(result.max_crossings_per_row),
+        u64ForPrint(average(result.boundary_checks)),
+        u64ForPrint(average(result.boundary_hits)),
+        u64ForPrint(average(result.fill_candidates)),
+        u64ForPrint(average(result.alpha_segment_refs)),
+        u64ForPrint(result.max_alpha_segments_per_task),
         u64ForPrint(cpu_encode_avg),
         u64ForPrint(commit_avg),
         u64ForPrint(average(result.resource_ns)),
         u64ForPrint(average(result.upload_ns)),
         u64ForPrint(average(result.compute_encode_ns)),
         u64ForPrint(average(result.blit_encode_ns)),
+        u64ForPrint(gpu_wait_avg),
+        u64ForPrint(@intFromBool(result.gpu_wait_samples > 0)),
         u64ForPrint(result.calls),
         u64ForPrint(result.tasks),
         u64ForPrint(result.dispatches),
@@ -271,6 +309,13 @@ fn printResult(result: Accumulator) void {
 
 fn average(total: u128) u64 {
     return @intCast(total / measured_frames);
+}
+
+fn measureGpuWait() ?u64 {
+    var pixel = [_]u8{0} ** 4;
+    const start = nowNs();
+    if (!device.readPixelsGL(gpa, 0, scene_width_u32, scene_height_u32, 0, 0, 1, 1, 4, &pixel)) return null;
+    return nowNs() - start;
 }
 
 fn nowNs() u64 {

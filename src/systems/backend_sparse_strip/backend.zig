@@ -127,6 +127,7 @@ pub const Backend = struct {
     call_clip_indices: std.ArrayList(u32) = .empty,
     segments: std.ArrayList(Segment) = .empty,
     tiles: std.ArrayList(TileRef) = .empty,
+    bin_scratch: bin.Scratch = .{},
     strips: std.ArrayList(Strip) = .empty,
     strip_segment_indices: std.ArrayList(u32) = .empty,
     alphas: std.ArrayList(u8) = .empty,
@@ -162,6 +163,7 @@ pub const Backend = struct {
         self.call_clip_indices.deinit(gpa);
         self.segments.deinit(gpa);
         self.tiles.deinit(gpa);
+        self.bin_scratch.deinit(gpa);
         self.strips.deinit(gpa);
         self.strip_segment_indices.deinit(gpa);
         self.alphas.deinit(gpa);
@@ -206,7 +208,7 @@ pub const Backend = struct {
         if (profile) |p| p.reset();
 
         const bin_start = profileStart(profile);
-        bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles) catch return false;
+        bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles, &self.bin_scratch) catch return false;
         if (profile) |p| p.bin_ns += elapsedSince(bin_start);
 
         const coarse_start = profileStart(profile);
@@ -243,7 +245,7 @@ pub const Backend = struct {
         if (profile) |p| p.reset();
 
         const bin_start = profileStart(profile);
-        bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles) catch return false;
+        bin.build(self.gpa, self.viewport_width, self.viewport_height, self.calls.items, self.segments.items, &self.tiles, &self.bin_scratch) catch return false;
         if (profile) |p| p.bin_ns += elapsedSince(bin_start);
 
         const coarse_start = profileStart(profile);

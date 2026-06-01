@@ -7,6 +7,28 @@ const strip = @import("strip.zig");
 const max_bucket_sort_tiles: usize = 1_000_000;
 const min_bucket_sort_tiles: usize = 65_536;
 
+pub const Scratch = struct {
+    buckets: []usize = &.{},
+    sorted: []strip.TileRef = &.{},
+
+    pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
+        if (self.buckets.len != 0) gpa.free(self.buckets);
+        if (self.sorted.len != 0) gpa.free(self.sorted);
+        self.* = .{};
+    }
+
+    fn ensure(self: *Scratch, gpa: std.mem.Allocator, bucket_count: usize, tile_count: usize) !void {
+        if (self.buckets.len < bucket_count) {
+            if (self.buckets.len != 0) gpa.free(self.buckets);
+            self.buckets = try gpa.alloc(usize, bucket_count);
+        }
+        if (self.sorted.len < tile_count) {
+            if (self.sorted.len != 0) gpa.free(self.sorted);
+            self.sorted = try gpa.alloc(strip.TileRef, tile_count);
+        }
+    }
+};
+
 pub fn build(
     gpa: std.mem.Allocator,
     viewport_width: f32,
@@ -14,6 +36,7 @@ pub fn build(
     calls: []const encode.EncodedCall,
     segments: []const encode.Segment,
     tiles: *std.ArrayList(strip.TileRef),
+    scratch: ?*Scratch,
 ) !void {
     tiles.clearRetainingCapacity();
     if (viewport_width <= 0 or viewport_height <= 0) return;
@@ -38,7 +61,7 @@ pub fn build(
         }
     }
 
-    try sortTiles(gpa, @intCast(max_tile_x + 1), @intCast(max_tile_y + 1), tiles);
+    try sortTiles(gpa, @intCast(max_tile_x + 1), @intCast(max_tile_y + 1), tiles, scratch);
 }
 
 fn appendSegmentTiles(
@@ -141,20 +164,25 @@ fn tileCoordForEnd(x: f32, seg: encode.Segment) i32 {
     return strip.tileCoord(x - 0.001);
 }
 
-fn sortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usize, tiles: *std.ArrayList(strip.TileRef)) !void {
-    if (!try bucketSortTiles(gpa, width_tiles, height_tiles, tiles)) {
+fn sortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usize, tiles: *std.ArrayList(strip.TileRef), scratch: ?*Scratch) !void {
+    if (!try bucketSortTiles(gpa, width_tiles, height_tiles, tiles, scratch)) {
         std.mem.sort(strip.TileRef, tiles.items, {}, lessThan);
     }
 }
 
-fn bucketSortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usize, tiles: *std.ArrayList(strip.TileRef)) !bool {
+fn bucketSortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usize, tiles: *std.ArrayList(strip.TileRef), scratch: ?*Scratch) !bool {
     if (tiles.items.len <= 1) return true;
     const tile_count = width_tiles * height_tiles;
     if (tile_count == 0 or tile_count > max_bucket_sort_tiles) return false;
     if (tile_count > @max(tiles.items.len * 4, min_bucket_sort_tiles)) return false;
 
-    const buckets = try gpa.alloc(usize, tile_count);
-    defer gpa.free(buckets);
+    var local_scratch: Scratch = .{};
+    defer local_scratch.deinit(gpa);
+    const work = scratch orelse &local_scratch;
+    try work.ensure(gpa, tile_count, tiles.items.len);
+
+    const buckets = work.buckets[0..tile_count];
+    const sorted = work.sorted[0..tiles.items.len];
     @memset(buckets, 0);
 
     for (tiles.items) |tile| {
@@ -168,8 +196,6 @@ fn bucketSortTiles(gpa: std.mem.Allocator, width_tiles: usize, height_tiles: usi
         running += count;
     }
 
-    const sorted = try gpa.alloc(strip.TileRef, tiles.items.len);
-    defer gpa.free(sorted);
     for (tiles.items) |tile| {
         const bucket = bucketIndex(width_tiles, tile);
         const out_index = buckets[bucket];
@@ -212,6 +238,6 @@ test "bucket tile sort matches comparison order for production append order" {
     defer testing.allocator.free(expected);
     std.mem.sort(strip.TileRef, expected, {}, lessThan);
 
-    try sortTiles(testing.allocator, 3, 2, &tiles);
+    try sortTiles(testing.allocator, 3, 2, &tiles, null);
     try testing.expectEqualSlices(strip.TileRef, expected, tiles.items);
 }

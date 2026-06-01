@@ -111,9 +111,12 @@ pub const Profile = struct {
     crossing_rows: usize = 0,
     crossing_items: usize = 0,
     crossing_sort_rows: usize = 0,
+    max_crossings_per_row: usize = 0,
     boundary_checks: usize = 0,
     boundary_hits: usize = 0,
     fill_candidates: usize = 0,
+    alpha_segment_refs: usize = 0,
+    max_alpha_segments_per_task: usize = 0,
 };
 
 pub const Packet = struct {
@@ -252,6 +255,10 @@ pub fn build(
                 .strip_index = @intCast(strip_index),
             });
             packet.stats.alpha_fill_tasks += 1;
+            if (profile) |p| {
+                p.alpha_segment_refs += call.segments.count;
+                p.max_alpha_segments_per_task = @max(p.max_alpha_segments_per_task, call.segments.count);
+            }
         }
 
         const fill_task_start = profileStart(profile);
@@ -371,6 +378,7 @@ fn appendFillTasks(
         if (profile) |p| {
             p.crossing_rows += 1;
             p.crossing_items += scratch.crossings.items.len;
+            p.max_crossings_per_row = @max(p.max_crossings_per_row, scratch.crossings.items.len);
         }
         if (scratch.crossings.items.len == 0) continue;
 
