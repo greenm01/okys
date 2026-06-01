@@ -259,6 +259,8 @@ OKYpaint okyImagePattern(OKYcontext *ctx, float ox, float oy, float ex,
 /* --- images ------------------------------------------------------------ */
 int okyCreateImageRGBA(OKYcontext *ctx, int w, int h,
                        const unsigned char *data);
+int okyCreateImageMem(OKYcontext *ctx, const unsigned char *data, int ndata);
+int okyCreateImage(OKYcontext *ctx, const char *filename);
 void okyUpdateImage(OKYcontext *ctx, int image, const unsigned char *data);
 void okyImageSize(OKYcontext *ctx, int image, int *w, int *h);
 void okyDeleteImage(OKYcontext *ctx, int image);

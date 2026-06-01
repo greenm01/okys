@@ -311,6 +311,18 @@ export fn okyCreateImageRGBA(ctx: ?*Context, w: c_int, h: c_int, data: ?[*]const
     return @intCast(@intFromEnum(image_ops.createImageRGBA(ctx.?, width, height, bytes)));
 }
 
+export fn okyCreateImageMem(ctx: ?*Context, data: ?[*]const u8, ndata: c_int) c_int {
+    if (ctx == null or data == null or ndata <= 0) return 0;
+    const bytes = data.?[0..@intCast(ndata)];
+    return @intCast(@intFromEnum(image_ops.createImageMem(ctx.?, bytes)));
+}
+
+export fn okyCreateImage(ctx: ?*Context, filename: ?[*]const u8) c_int {
+    if (ctx == null or filename == null) return 0;
+    const path = stringSlice(filename, null);
+    return @intCast(@intFromEnum(image_ops.createImage(ctx.?, path)));
+}
+
 export fn okyUpdateImage(ctx: ?*Context, image: c_int, data: ?[*]const u8) void {
     if (ctx == null or image <= 0 or data == null) return;
 

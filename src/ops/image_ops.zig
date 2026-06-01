@@ -1,10 +1,14 @@
 //! Image verbs. These route to the backend's texture upload and the texture
 //! table. Allocation is allowed here; images are long-lived resources.
 
+const std = @import("std");
 const Context = @import("../state/context.zig").Context;
 const image = @import("../types/image.zig");
 const ImageId = image.ImageId;
 const TexFormat = image.TexFormat;
+const qoi = @import("../systems/qoi.zig");
+
+const max_image_file_bytes = 64 * 1024 * 1024;
 
 pub fn createImageRGBA(ctx: *Context, w: u32, h: u32, data: ?[]const u8) ImageId {
     if (w == 0 or h == 0) {
@@ -25,6 +29,19 @@ pub fn createImageRGBA(ctx: *Context, w: u32, h: u32, data: ?[]const u8) ImageId
         return .none;
     }
     return id;
+}
+
+pub fn createImageMem(ctx: *Context, data: []const u8) ImageId {
+    var decoded = qoi.decode(ctx.gpa, data) catch return .none;
+    defer decoded.deinit(ctx.gpa);
+    return createImageRGBA(ctx, decoded.width, decoded.height, decoded.rgba);
+}
+
+pub fn createImage(ctx: *Context, filename: []const u8) ImageId {
+    if (filename.len == 0) return .none;
+    const data = readImageFile(ctx.gpa, filename) catch return .none;
+    defer ctx.gpa.free(data);
+    return createImageMem(ctx, data);
 }
 
 pub fn updateImage(ctx: *Context, id: ImageId, data: []const u8) void {
@@ -94,4 +111,25 @@ fn byteLen(w: u32, h: u32, format: TexFormat) usize {
         .rgba8 => pixels * 4,
         .a8 => pixels,
     };
+}
+
+fn readImageFile(gpa: std.mem.Allocator, filename: []const u8) ![]u8 {
+    const filename_z = try gpa.dupeZ(u8, filename);
+    defer gpa.free(filename_z);
+
+    const file = std.c.fopen(filename_z, "rb") orelse return error.FileNotFound;
+    defer _ = std.c.fclose(file);
+
+    var bytes: std.ArrayList(u8) = .empty;
+    errdefer bytes.deinit(gpa);
+
+    var buf: [16 * 1024]u8 = undefined;
+    while (true) {
+        const read_count = std.c.fread(&buf, 1, buf.len, file);
+        if (read_count == 0) break;
+        if (bytes.items.len + read_count > max_image_file_bytes) return error.FileTooBig;
+        try bytes.appendSlice(gpa, buf[0..read_count]);
+        if (read_count < buf.len) break;
+    }
+    return try bytes.toOwnedSlice(gpa);
 }

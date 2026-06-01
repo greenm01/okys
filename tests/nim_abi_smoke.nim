@@ -87,6 +87,8 @@ proc okyBoxGradient(ctx: ptr OKYcontext; x, y, w, h, radius, feather: cfloat; in
 proc okyImagePattern(ctx: ptr OKYcontext; ox, oy, ex, ey, angle: cfloat; image: cint; alpha: cfloat): OKYpaint {.importc, header: "okys.h".}
 
 proc okyCreateImageRGBA(ctx: ptr OKYcontext; w, h: cint; data: ptr uint8): cint {.importc, header: "okys.h".}
+proc okyCreateImageMem(ctx: ptr OKYcontext; data: ptr uint8; ndata: cint): cint {.importc, header: "okys.h".}
+proc okyCreateImage(ctx: ptr OKYcontext; filename: cstring): cint {.importc, header: "okys.h".}
 proc okyUpdateImage(ctx: ptr OKYcontext; image: cint; data: ptr uint8) {.importc, header: "okys.h".}
 proc okyImageSize(ctx: ptr OKYcontext; image: cint; w, h: ptr cint) {.importc, header: "okys.h".}
 proc okyDeleteImage(ctx: ptr OKYcontext; image: cint) {.importc, header: "okys.h".}
@@ -194,6 +196,11 @@ var pixels = [
 ]
 let image = okyCreateImageRGBA(ctx, 2, 2, addr pixels[0])
 doAssert image == 0
+var badImage = [uint8('n'), uint8('o'), uint8('p'), uint8('e')]
+doAssert okyCreateImageMem(ctx, addr badImage[0], cint(badImage.len)) == 0
+doAssert okyCreateImageMem(ctx, nil, 0) == 0
+doAssert okyCreateImage(ctx, "/path/to/no/such/okys-image.qoi") == 0
+doAssert okyCreateImage(ctx, nil) == 0
 var imageW: cint = 123
 var imageH: cint = 456
 okyImageSize(ctx, image, addr imageW, addr imageH)

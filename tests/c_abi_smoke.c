@@ -86,6 +86,11 @@ int main(void) {
     };
     int image = okyCreateImageRGBA(ctx, 2, 2, pixels);
     assert(image == 0);
+    unsigned char bad_image[] = {'n', 'o', 'p', 'e'};
+    assert(okyCreateImageMem(ctx, bad_image, (int)sizeof(bad_image)) == 0);
+    assert(okyCreateImageMem(ctx, NULL, 0) == 0);
+    assert(okyCreateImage(ctx, "/path/to/no/such/okys-image.qoi") == 0);
+    assert(okyCreateImage(ctx, NULL) == 0);
     int image_w = 123;
     int image_h = 456;
     okyImageSize(ctx, image, &image_w, &image_h);

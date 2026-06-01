@@ -18,6 +18,7 @@ const diagnostics_tests = @import("diagnostics.zig");
 const draw_list_tests = @import("draw_list.zig");
 const image_ops_tests = @import("image_ops.zig");
 const mock_backend = @import("mock_backend.zig");
+const qoi_tests = @import("qoi.zig");
 const sokol_device_tests = @import("sokol_device.zig");
 const texture_tests = @import("textures.zig");
 const tiger_data_tests = @import("tiger_data.zig");
@@ -64,6 +65,7 @@ test "all production modules analyze" {
     _ = okys.systems.flatten;
     _ = okys.systems.stroke;
     _ = okys.systems.convex;
+    _ = okys.systems.qoi;
     _ = okys.systems.backend_stencil;
     _ = okys.systems.backend_stencil.draw_plan;
     _ = okys.systems.backend_stencil.replay;
@@ -98,6 +100,7 @@ test "all production modules analyze" {
     _ = draw_list_tests;
     _ = image_ops_tests;
     _ = mock_backend;
+    _ = qoi_tests;
     _ = sokol_device_tests;
     _ = texture_tests;
     _ = tiger_data_tests;
