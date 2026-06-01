@@ -195,7 +195,8 @@ test "GPU packet alpha-fill tasks use compact task records" {
 
     for (packet.tasks.items) |task| {
         if (!sparse.gpu_fine.taskIsAlpha(task)) continue;
-        try testing.expectEqual(@as(u32, 0), sparse.gpu_fine.taskAlphaIndex(task));
+        try testing.expect(sparse.gpu_fine.taskSegmentCount(task) > 0);
+        try testing.expect(task.segment_start + sparse.gpu_fine.taskSegmentCount(task) <= packet.segment_indices.items.len);
     }
 }
 
@@ -257,7 +258,7 @@ fn simulateGpuPacket(
         const start: usize = @intCast(call.task_start);
         const count: usize = @intCast(call.task_count);
         for (packet.tasks.items[start..][0..count]) |task| {
-            simulateTask(width, height, call, task, packet.clips.items, packet.clip_indices.items, segments, textures, surface);
+            simulateTask(width, height, call, task, packet.clips.items, packet.clip_indices.items, packet.segment_indices.items, segments, textures, surface);
         }
     }
 
@@ -271,6 +272,7 @@ fn simulateTask(
     task: sparse.gpu_fine.GpuFineTask,
     clips: []const sparse.gpu_fine.GpuClip,
     clip_indices: []const sparse.gpu_fine.GpuClipIndex,
+    segment_indices: []const sparse.gpu_fine.GpuSegmentIndex,
     segments: []const sparse.Segment,
     textures: []const sparse.fine.Texture,
     surface: []u8,
@@ -279,17 +281,22 @@ fn simulateTask(
     while (local_y < sparse.strip.tile_size) : (local_y += 1) {
         var local_x: u32 = 0;
         while (local_x < sparse.strip.tile_size) : (local_x += 1) {
-            const x = task.x + local_x;
-            const y = task.y + local_y;
+            const coord = sparse.gpu_fine.taskCoord(task);
+            const x = coord.x + local_x;
+            const y = coord.y + local_y;
             if (x >= width or y >= height) continue;
 
             var alpha: f32 = 1;
             if (sparse.gpu_fine.taskIsAlpha(task)) {
                 var area: f32 = 0;
-                const start: usize = @intCast(call.segment_start);
-                const count: usize = @intCast(call.segment_count);
-                for (segments[start..][0..count]) |seg| {
-                    area += segmentArea(@as(f32, @floatFromInt(x)), @as(f32, @floatFromInt(y)), seg);
+                const start: usize = @intCast(task.segment_start);
+                const count: usize = @intCast(sparse.gpu_fine.taskSegmentCount(task));
+                for (segment_indices[start..][0..count]) |segment_index| {
+                    area += segmentArea(
+                        @as(f32, @floatFromInt(x)),
+                        @as(f32, @floatFromInt(y)),
+                        segments[segment_index.value],
+                    );
                 }
                 alpha = areaToAlpha(call.fill_rule, area);
             }
@@ -546,7 +553,8 @@ fn expectSurfaceApprox(expected: []const u8, actual: []const u8, tolerance: u8) 
 
 fn expectAlphaTaskAt(tasks: []const sparse.gpu_fine.GpuFineTask, x: u32, y: u32) !void {
     for (tasks) |task| {
-        if (sparse.gpu_fine.taskIsAlpha(task) and task.x == x and task.y == y) return;
+        const coord = sparse.gpu_fine.taskCoord(task);
+        if (sparse.gpu_fine.taskIsAlpha(task) and coord.x == x and coord.y == y) return;
     }
     std.debug.print("missing alpha-fill task at {d},{d}\n", .{ x, y });
     return error.MissingAlphaFillTask;

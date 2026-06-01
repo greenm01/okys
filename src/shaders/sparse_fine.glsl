@@ -48,10 +48,14 @@ struct Segment {
 };
 
 struct GpuFineTask {
-    uint x;
-    uint y;
+    uint xy;
     uint call_index;
-    uint kind_aux;
+    uint segment_start;
+    uint segment_count_kind;
+};
+
+struct GpuSegmentIndex {
+    uint value;
 };
 
 const uint task_kind_alpha_mask = 0x80000000u;
@@ -222,6 +226,10 @@ layout(binding=6) readonly buffer clip_indices_buf {
     GpuClipIndex clip_indices[];
 };
 
+layout(binding=7) readonly buffer segment_indices_buf {
+    GpuSegmentIndex segment_indices[];
+};
+
 layout(binding=4, rgba8) uniform image2D fine_surface_img;
 layout(binding=5) uniform texture2D image_tex;
 layout(binding=0) uniform sampler image_smp;
@@ -232,6 +240,16 @@ float coverage_for_range(uint fill_rule, uint segment_start, uint segment_count,
     float area = 0.0;
     for (uint i = 0u; i < segment_count; i += 1u) {
         area += segment_area(float(x), float(y), segments[segment_start + i]);
+    }
+    return area_to_alpha(fill_rule, area);
+}
+
+float coverage_for_task(uint fill_rule, GpuFineTask task, uint x, uint y) {
+    float area = 0.0;
+    uint segment_count = task.segment_count_kind & ~task_kind_alpha_mask;
+    for (uint i = 0u; i < segment_count; i += 1u) {
+        uint segment_index = segment_indices[task.segment_start + i].value;
+        area += segment_area(float(x), float(y), segments[segment_index]);
     }
     return area_to_alpha(fill_rule, area);
 }
@@ -249,15 +267,15 @@ void main() {
 
     GpuFineTask task = tasks[uint(task_start + task_offset)];
     GpuCall call = calls[task.call_index];
-    uint x = task.x + local_x;
-    uint y = task.y + local_y;
+    uint x = (task.xy & 0xffffu) + local_x;
+    uint y = (task.xy >> 16) + local_y;
     if (x >= uint(surface_width) || y >= uint(surface_height)) {
         return;
     }
 
     float alpha = 1.0;
-    if ((task.kind_aux & task_kind_alpha_mask) != 0u) {
-        alpha = coverage_for_range(call.fill_rule, call.segment_start, call.segment_count, x, y);
+    if ((task.segment_count_kind & task_kind_alpha_mask) != 0u) {
+        alpha = coverage_for_task(call.fill_rule, task, x, y);
     }
     if (alpha <= 0.0) {
         return;

@@ -77,10 +77,19 @@ pub const GpuClipIndex = extern struct {
 };
 
 pub const GpuFineTask = extern struct {
+    xy: u32 = 0,
+    call_index: u32 = 0,
+    segment_start: u32 = 0,
+    segment_count_kind: u32 = 0,
+};
+
+pub const GpuSegmentIndex = extern struct {
+    value: u32 = 0,
+};
+
+pub const TaskCoord = struct {
     x: u32 = 0,
     y: u32 = 0,
-    call_index: u32 = 0,
-    kind_aux: u32 = 0,
 };
 
 pub const PacketStats = struct {
@@ -121,6 +130,7 @@ pub const Packet = struct {
     clips: std.ArrayList(GpuClip) = .empty,
     clip_indices: std.ArrayList(GpuClipIndex) = .empty,
     tasks: std.ArrayList(GpuFineTask) = .empty,
+    segment_indices: std.ArrayList(GpuSegmentIndex) = .empty,
     scratch: Scratch = .{},
     stats: PacketStats = .{},
 
@@ -129,6 +139,7 @@ pub const Packet = struct {
         self.clips.deinit(gpa);
         self.clip_indices.deinit(gpa);
         self.tasks.deinit(gpa);
+        self.segment_indices.deinit(gpa);
         self.scratch.deinit(gpa);
     }
 
@@ -137,6 +148,7 @@ pub const Packet = struct {
         self.clips.clearRetainingCapacity();
         self.clip_indices.clearRetainingCapacity();
         self.tasks.clearRetainingCapacity();
+        self.segment_indices.clearRetainingCapacity();
         self.scratch.clearBoundaryMask();
         self.scratch.crossings.clearRetainingCapacity();
         self.stats = .{};
@@ -191,7 +203,6 @@ pub fn build(
     packet: *Packet,
     profile: ?*Profile,
 ) !bool {
-    _ = strip_segment_indices;
     if (profile) |p| p.* = .{};
     packet.clearRetainingCapacity();
     packet.stats.calls = calls.len;
@@ -200,6 +211,7 @@ pub fn build(
     try packet.calls.ensureTotalCapacity(gpa, calls.len);
     try packet.clips.ensureTotalCapacity(gpa, clips.len);
     try packet.clip_indices.ensureTotalCapacity(gpa, call_clip_indices.len);
+    _ = strip_segment_indices;
 
     const pack_start = profileStart(profile);
     for (clips) |clip| {
@@ -239,18 +251,25 @@ pub fn build(
         try markBoundaryStrips(gpa, &packet.scratch, width_tiles, height_tiles, strips, call_strips);
         if (profile) |p| p.boundary_mark_ns += elapsedSince(boundary_start);
 
+        var current_alpha_y: ?u16 = null;
+        var current_alpha_segments: strip.Range = .{};
         for (call_strips) |strip_index| {
             const s = strips[strip_index];
-            try packet.tasks.append(gpa, .{
-                .x = s.x,
-                .y = s.y,
-                .call_index = call_index,
-                .kind_aux = alphaTaskAux(0),
-            });
+            if (current_alpha_y == null or current_alpha_y.? != s.y) {
+                current_alpha_y = s.y;
+                current_alpha_segments = try appendAlphaTaskSegmentIndices(
+                    gpa,
+                    &packet.segment_indices,
+                    call.segments,
+                    segments,
+                    s.y,
+                );
+            }
+            try packet.tasks.append(gpa, alphaTask(s.x, s.y, call_index, current_alpha_segments));
             packet.stats.alpha_fill_tasks += 1;
             if (profile) |p| {
-                p.alpha_segment_refs += call.segments.count;
-                p.max_alpha_segments_per_task = @max(p.max_alpha_segments_per_task, call.segments.count);
+                p.alpha_segment_refs += current_alpha_segments.count;
+                p.max_alpha_segments_per_task = @max(p.max_alpha_segments_per_task, current_alpha_segments.count);
             }
         }
 
@@ -286,6 +305,7 @@ pub fn build(
         @sizeOf(GpuClip) * packet.clips.items.len +
         @sizeOf(GpuClipIndex) * packet.clip_indices.items.len +
         @sizeOf(GpuFineTask) * packet.tasks.items.len +
+        @sizeOf(GpuSegmentIndex) * packet.segment_indices.items.len +
         @sizeOf(encode.Segment) * segments.len;
     packet.scratch.clearBoundaryMask();
     return true;
@@ -346,17 +366,69 @@ pub fn fillTaskAux() u32 {
     return task_fill;
 }
 
-pub fn alphaTaskAux(alpha_index: u32) u32 {
-    std.debug.assert(alpha_index < task_kind_alpha_mask);
-    return task_kind_alpha_mask | alpha_index;
+pub fn fillTask(x: u16, y: u16, call_index: u32) GpuFineTask {
+    return .{
+        .xy = packTaskXY(x, y),
+        .call_index = call_index,
+        .segment_start = 0,
+        .segment_count_kind = fillTaskAux(),
+    };
+}
+
+pub fn alphaTask(x: u16, y: u16, call_index: u32, segment_indices: strip.Range) GpuFineTask {
+    return .{
+        .xy = packTaskXY(x, y),
+        .call_index = call_index,
+        .segment_start = segment_indices.start,
+        .segment_count_kind = task_kind_alpha_mask | segment_indices.count,
+    };
 }
 
 pub fn taskIsAlpha(task: GpuFineTask) bool {
-    return (task.kind_aux & task_kind_alpha_mask) != 0;
+    return (task.segment_count_kind & task_kind_alpha_mask) != 0;
 }
 
-pub fn taskAlphaIndex(task: GpuFineTask) u32 {
-    return task.kind_aux & ~task_kind_alpha_mask;
+pub fn taskSegmentCount(task: GpuFineTask) u32 {
+    return task.segment_count_kind & ~task_kind_alpha_mask;
+}
+
+pub fn taskCoord(task: GpuFineTask) TaskCoord {
+    return .{
+        .x = task.xy & 0xffff,
+        .y = task.xy >> 16,
+    };
+}
+
+fn packTaskXY(x: u16, y: u16) u32 {
+    return @as(u32, x) | (@as(u32, y) << 16);
+}
+
+fn appendAlphaTaskSegmentIndices(
+    gpa: std.mem.Allocator,
+    segment_indices: *std.ArrayList(GpuSegmentIndex),
+    call_segments: strip.Range,
+    segments: []const encode.Segment,
+    tile_y: u16,
+) !strip.Range {
+    const start = segment_indices.items.len;
+    const tile_top: f32 = @floatFromInt(tile_y);
+    const tile_bottom = tile_top + @as(f32, @floatFromInt(strip.tile_size));
+    const segment_start: usize = @intCast(call_segments.start);
+    const segment_count: usize = @intCast(call_segments.count);
+    for (segments[segment_start..][0..segment_count], 0..) |seg, offset| {
+        if (!segmentOverlapsY(seg, tile_top, tile_bottom)) continue;
+        try segment_indices.append(gpa, .{ .value = @intCast(segment_start + offset) });
+    }
+    return .{
+        .start = @intCast(start),
+        .count = @intCast(segment_indices.items.len - start),
+    };
+}
+
+fn segmentOverlapsY(seg: encode.Segment, tile_top: f32, tile_bottom: f32) bool {
+    const min_y = @min(seg.y0, seg.y1);
+    const max_y = @max(seg.y0, seg.y1);
+    return max_y > min_y and max_y > tile_top and min_y < tile_bottom;
 }
 
 fn appendFillTasks(
@@ -415,12 +487,11 @@ fn appendFillTasks(
                 if (profile) |p| p.boundary_hits += 1;
                 continue;
             }
-            try tasks.append(gpa, .{
-                .x = @intCast(strip.tileOrigin(@intCast(tile_x))),
-                .y = @intCast(strip.tileOrigin(@intCast(tile_y))),
-                .call_index = call_index,
-                .kind_aux = fillTaskAux(),
-            });
+            try tasks.append(gpa, fillTask(
+                @intCast(strip.tileOrigin(@intCast(tile_x))),
+                @intCast(strip.tileOrigin(@intCast(tile_y))),
+                call_index,
+            ));
             stats.fill_tasks += 1;
         }
     }
@@ -765,8 +836,10 @@ comptime {
     std.debug.assert(@offsetOf(GpuClip, "bounds") == 0);
     std.debug.assert(@offsetOf(GpuClip, "segment_start") == 16);
     std.debug.assert(@sizeOf(GpuClipIndex) == 4);
+    std.debug.assert(@sizeOf(GpuSegmentIndex) == 4);
     std.debug.assert(@sizeOf(GpuFineTask) == 16);
-    std.debug.assert(@offsetOf(GpuFineTask, "x") == 0);
-    std.debug.assert(@offsetOf(GpuFineTask, "call_index") == 8);
-    std.debug.assert(@offsetOf(GpuFineTask, "kind_aux") == 12);
+    std.debug.assert(@offsetOf(GpuFineTask, "xy") == 0);
+    std.debug.assert(@offsetOf(GpuFineTask, "call_index") == 4);
+    std.debug.assert(@offsetOf(GpuFineTask, "segment_start") == 8);
+    std.debug.assert(@offsetOf(GpuFineTask, "segment_count_kind") == 12);
 }

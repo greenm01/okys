@@ -418,6 +418,7 @@ pub const Backend = struct {
         const clip_indices_bytes = bytesOf(gpu_fine.GpuClipIndex, packet.clip_indices.items.len);
         const segments_bytes = bytesOf(Segment, self.segments.items.len);
         const tasks_bytes = bytesOf(gpu_fine.GpuFineTask, packet.tasks.items.len);
+        const segment_indices_bytes = bytesOf(gpu_fine.GpuSegmentIndex, packet.segment_indices.items.len);
         return .{
             .calls = packet.calls.items.len,
             .clips = packet.clips.items.len,
@@ -433,7 +434,7 @@ pub const Backend = struct {
             .tile_refs_bytes = bytesOf(TileRef, self.tiles.items.len),
             .strips_bytes = bytesOf(Strip, self.strips.items.len),
             .strip_indices_bytes = bytesOf(u32, self.strip_segment_indices.items.len),
-            .frame_packet_bytes = calls_bytes + clips_bytes + clip_indices_bytes + segments_bytes + tasks_bytes,
+            .frame_packet_bytes = calls_bytes + clips_bytes + clip_indices_bytes + segments_bytes + tasks_bytes + segment_indices_bytes,
             .gpu_fine_upload_bytes = packet.stats.upload_bytes,
             .upload_budget_warnings = @intFromBool(packet.stats.upload_bytes > gpu_fine_upload_warning_bytes),
         };
