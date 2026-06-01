@@ -277,10 +277,11 @@ fn simulateTask(
     textures: []const sparse.fine.Texture,
     surface: []u8,
 ) void {
+    const task_width = @as(u32, sparse.strip.tile_size) * sparse.gpu_fine.taskFillTileCount(task);
     var local_y: u32 = 0;
     while (local_y < sparse.strip.tile_size) : (local_y += 1) {
         var local_x: u32 = 0;
-        while (local_x < sparse.strip.tile_size) : (local_x += 1) {
+        while (local_x < task_width) : (local_x += 1) {
             const coord = sparse.gpu_fine.taskCoord(task);
             const x = coord.x + local_x;
             const y = coord.y + local_y;

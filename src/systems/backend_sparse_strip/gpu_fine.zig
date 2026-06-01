@@ -11,12 +11,15 @@ const xforms = @import("../transform.zig");
 pub const task_fill: u32 = 0;
 pub const task_alpha_fill: u32 = 1;
 pub const task_kind_alpha_mask: u32 = 0x80000000;
+pub const task_kind_fill_span_mask: u32 = 0x40000000;
+pub const task_payload_mask: u32 = 0x3fffffff;
 pub const call_flag_opaque: u32 = 1 << 0;
 
 const SparseConfig = struct {
     const tile_size: u16 = strip.tile_size;
     const tile_area: u32 = strip.tile_area;
     const crossing_insertion_sort_threshold: usize = 32;
+    const max_fill_span_tiles: u32 = 2;
 
     comptime {
         std.debug.assert(tile_size == 4);
@@ -491,11 +494,15 @@ pub fn fillTaskAux() u32 {
 }
 
 pub fn fillTask(x: u16, y: u16, call_index: u32) GpuFineTask {
+    return fillSpanTask(x, y, call_index, 1);
+}
+
+pub fn fillSpanTask(x: u16, y: u16, call_index: u32, tile_count: u32) GpuFineTask {
     return .{
         .xy = packTaskXY(x, y),
         .call_index = call_index,
         .segment_start = 0,
-        .segment_count_kind = fillTaskAux(),
+        .segment_count_kind = task_kind_fill_span_mask | tile_count,
     };
 }
 
@@ -512,8 +519,17 @@ pub fn taskIsAlpha(task: GpuFineTask) bool {
     return (task.segment_count_kind & task_kind_alpha_mask) != 0;
 }
 
+pub fn taskIsFillSpan(task: GpuFineTask) bool {
+    return (task.segment_count_kind & task_kind_fill_span_mask) != 0;
+}
+
 pub fn taskSegmentCount(task: GpuFineTask) u32 {
-    return task.segment_count_kind & ~task_kind_alpha_mask;
+    return task.segment_count_kind & task_payload_mask;
+}
+
+pub fn taskFillTileCount(task: GpuFineTask) u32 {
+    if (!taskIsFillSpan(task)) return 1;
+    return @max(task.segment_count_kind & task_payload_mask, 1);
 }
 
 pub fn taskCoord(task: GpuFineTask) TaskCoord {
@@ -592,28 +608,61 @@ fn appendFillTasks(
         var tile_x = std.math.clamp(strip.tileCoord(bounds[0]), 0, max_tile_x);
         const tile_x_end = std.math.clamp(strip.tileCoord(bounds[2] - 0.001), 0, max_tile_x);
         var crossing_index: usize = 0;
+        var span_start_x: i32 = 0;
+        var span_count: u32 = 0;
         const emit_start = profileStart(profile);
         while (tile_x <= tile_x_end) : (tile_x += 1) {
             const sample_x = @as(f32, @floatFromInt(tile_x)) * tile_size_f + 0.5;
             while (crossing_index < scratch.crossings.items.len and scratch.crossings.items[crossing_index].x <= sample_x) : (crossing_index += 1) {
                 winding -= scratch.crossings.items[crossing_index].winding;
             }
-            if (!filled(fill_rule, winding)) continue;
+            if (!filled(fill_rule, winding)) {
+                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
+                continue;
+            }
             if (profile) |p| p.fill_candidates += 1;
             if (profile) |p| p.boundary_checks += 1;
             if (containsBoundaryTile(scratch, width_tiles, tile_x, tile_y)) {
                 if (profile) |p| p.boundary_hits += 1;
+                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
                 continue;
             }
-            tasks.appendAssumeCapacity(fillTask(
-                @intCast(strip.tileOrigin(@intCast(tile_x))),
-                @intCast(strip.tileOrigin(@intCast(tile_y))),
-                call_index,
-            ));
-            stats.fill_tasks += 1;
+            if (span_count == 0) {
+                span_start_x = tile_x;
+                span_count = 1;
+            } else if (tile_x == span_start_x + @as(i32, @intCast(span_count)) and span_count < SparseConfig.max_fill_span_tiles) {
+                span_count += 1;
+            } else {
+                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
+                span_start_x = tile_x;
+                span_count = 1;
+            }
+            if (span_count == SparseConfig.max_fill_span_tiles) {
+                appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
+            }
         }
+        appendPendingFillSpan(tasks, stats, call_index, span_start_x, tile_y, &span_count);
         if (profile) |p| p.fill_emit_ns += elapsedSince(emit_start);
     }
+}
+
+fn appendPendingFillSpan(
+    tasks: *std.ArrayList(GpuFineTask),
+    stats: *PacketStats,
+    call_index: u32,
+    span_start_x: i32,
+    tile_y: i32,
+    span_count: *u32,
+) void {
+    if (span_count.* == 0) return;
+    tasks.appendAssumeCapacity(fillSpanTask(
+        @intCast(strip.tileOrigin(@intCast(span_start_x))),
+        @intCast(strip.tileOrigin(@intCast(tile_y))),
+        call_index,
+        span_count.*,
+    ));
+    stats.fill_tasks += 1;
+    span_count.* = 0;
 }
 
 fn fillTaskCapacityForBounds(bounds: [4]f32, width: u32, height: u32) usize {

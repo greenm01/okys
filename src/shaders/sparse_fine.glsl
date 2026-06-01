@@ -59,6 +59,8 @@ struct GpuSegmentIndex {
 };
 
 const uint task_kind_alpha_mask = 0x80000000u;
+const uint task_kind_fill_span_mask = 0x40000000u;
+const uint task_payload_mask = 0x3fffffffu;
 
 float integrate_clamped_linear(float slope, float intercept, float y0, float y1) {
     if (slope == 0.0) {
@@ -243,7 +245,7 @@ float coverage_for_range(uint fill_rule, uint segment_start, uint segment_count,
 
 float coverage_for_task(uint fill_rule, GpuFineTask task, uint x, uint y) {
     float area = 0.0;
-    uint segment_count = task.segment_count_kind & ~task_kind_alpha_mask;
+    uint segment_count = task.segment_count_kind & task_payload_mask;
     for (uint i = 0u; i < segment_count; i += 1u) {
         uint segment_index = segment_indices[task.segment_start + i].value;
         area += segment_area(float(x), float(y), segments[segment_index]);
@@ -254,9 +256,6 @@ float coverage_for_task(uint fill_rule, GpuFineTask task, uint x, uint y) {
 void main() {
     uint local_x = gl_LocalInvocationID.x;
     uint local_y = gl_LocalInvocationID.y;
-    if (local_x >= 4u) {
-        return;
-    }
     int task_offset = int(gl_WorkGroupID.x);
     if (task_offset >= task_count) {
         return;
@@ -264,6 +263,13 @@ void main() {
 
     GpuFineTask task = tasks[uint(task_start + task_offset)];
     GpuCall call = calls[task.call_index];
+
+    bool alpha_task = (task.segment_count_kind & task_kind_alpha_mask) != 0u;
+    uint tile_count = ((task.segment_count_kind & task_kind_fill_span_mask) != 0u) ? max(task.segment_count_kind & task_payload_mask, 1u) : 1u;
+    if (local_x >= tile_count * 4u) {
+        return;
+    }
+
     uint x = (task.xy & 0xffffu) + local_x;
     uint y = (task.xy >> 16) + local_y;
     if (x >= uint(surface_width) || y >= uint(surface_height)) {
@@ -271,7 +277,7 @@ void main() {
     }
 
     float alpha = 1.0;
-    if ((task.segment_count_kind & task_kind_alpha_mask) != 0u) {
+    if (alpha_task) {
         alpha = coverage_for_task(call.fill_rule, task, x, y);
     }
     if (alpha <= 0.0) {

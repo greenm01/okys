@@ -205,6 +205,29 @@ test "sparse GPU fine packet encodes solid Fill and AlphaFill tasks by call" {
     try testing.expect(saw_alpha_fill);
 }
 
+test "sparse GPU fine packet packs adjacent fill tiles into spans" {
+    const backend = try Backend.create(testing.allocator);
+    defer backend.destroy();
+    const iface = backend.interface();
+    iface.viewport(iface.ctx, 40, 40, 1);
+
+    queueRect(&iface, 4, 4, 28, 28);
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+
+    try testing.expect(backend.buildGpuFinePacket(&packet, null));
+
+    var saw_two_tile_span = false;
+    for (packet.tasks.items) |task| {
+        if (sparse.gpu_fine.taskIsAlpha(task)) continue;
+        try testing.expect(sparse.gpu_fine.taskIsFillSpan(task));
+        try testing.expect(sparse.gpu_fine.taskFillTileCount(task) >= 1);
+        try testing.expect(sparse.gpu_fine.taskFillTileCount(task) <= 2);
+        if (sparse.gpu_fine.taskFillTileCount(task) == 2) saw_two_tile_span = true;
+    }
+    try testing.expect(saw_two_tile_span);
+}
+
 test "sparse GPU fine packet preserves per-call draw-order ranges" {
     const backend = try Backend.create(testing.allocator);
     defer backend.destroy();
