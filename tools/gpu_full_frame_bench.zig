@@ -90,6 +90,26 @@ const Accumulator = struct {
     tasks: usize = 0,
     dispatches: usize = 0,
     upload_bytes: usize = 0,
+    nonempty_calls: usize = 0,
+    fill_tasks: usize = 0,
+    alpha_fill_tasks: usize = 0,
+    segment_indices: usize = 0,
+    fill_span_tiles: usize = 0,
+    max_fill_span_tiles: usize = 0,
+    calls_bytes: usize = 0,
+    segments_bytes: usize = 0,
+    tasks_bytes: usize = 0,
+    segment_indices_bytes: usize = 0,
+    batch_groups: usize = 0,
+    batch_dispatches: usize = 0,
+    batch_calls: usize = 0,
+    batch_tasks: usize = 0,
+    max_batch_calls: usize = 0,
+    max_batch_tasks: usize = 0,
+    batch_break_task_gap: usize = 0,
+    batch_break_image_mismatch: usize = 0,
+    batch_break_invalid_bounds: usize = 0,
+    batch_break_overlap: usize = 0,
     fallback: sokol_device.SparseFineFallback = .none,
 
     fn add(
@@ -141,6 +161,26 @@ const Accumulator = struct {
         self.tasks = timing.tasks;
         self.dispatches = timing.dispatches;
         self.upload_bytes = timing.upload_bytes;
+        self.nonempty_calls = timing.nonempty_calls;
+        self.fill_tasks = timing.fill_tasks;
+        self.alpha_fill_tasks = timing.alpha_fill_tasks;
+        self.segment_indices = timing.segment_indices;
+        self.fill_span_tiles = timing.fill_span_tiles;
+        self.max_fill_span_tiles = timing.max_fill_span_tiles;
+        self.calls_bytes = timing.calls_bytes;
+        self.segments_bytes = timing.segments_bytes;
+        self.tasks_bytes = timing.tasks_bytes;
+        self.segment_indices_bytes = timing.segment_indices_bytes;
+        self.batch_groups = timing.batch_groups;
+        self.batch_dispatches = timing.batch_dispatches;
+        self.batch_calls = timing.batch_calls;
+        self.batch_tasks = timing.batch_tasks;
+        self.max_batch_calls = timing.max_batch_calls;
+        self.max_batch_tasks = timing.max_batch_tasks;
+        self.batch_break_task_gap = timing.batch_break_task_gap;
+        self.batch_break_image_mismatch = timing.batch_break_image_mismatch;
+        self.batch_break_invalid_bounds = timing.batch_break_invalid_bounds;
+        self.batch_break_overlap = timing.batch_break_overlap;
         self.fallback = timing.fallback;
     }
 };
@@ -332,7 +372,7 @@ fn fail(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\ttasks\tdispatches\tupload_bytes\tfallback\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tfallback\n");
 }
 
 fn printResult(result: Accumulator) void {
@@ -344,7 +384,7 @@ fn printResult(result: Accumulator) void {
     const scene_name = "ghostscript_tiger";
     const timing_scope = timing_mode.label();
     _ = std.c.printf(
-        "%.*s\tsparse_strip\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
+        "%.*s\tsparse_strip\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
         @as(c_int, @intCast(scene_name.len)),
         cString(scene_name),
         @as(c_int, @intCast(timing_scope.len)),
@@ -387,9 +427,29 @@ fn printResult(result: Accumulator) void {
         @as(c_int, @intCast(result.gpu_wait_status.label().len)),
         cString(result.gpu_wait_status.label()),
         u64ForPrint(result.calls),
+        u64ForPrint(result.nonempty_calls),
         u64ForPrint(result.tasks),
+        u64ForPrint(result.fill_tasks),
+        u64ForPrint(result.alpha_fill_tasks),
+        u64ForPrint(result.segment_indices),
+        u64ForPrint(result.fill_span_tiles),
+        u64ForPrint(result.max_fill_span_tiles),
         u64ForPrint(result.dispatches),
+        u64ForPrint(result.batch_groups),
+        u64ForPrint(result.batch_dispatches),
+        u64ForPrint(result.batch_calls),
+        u64ForPrint(result.batch_tasks),
+        u64ForPrint(result.max_batch_calls),
+        u64ForPrint(result.max_batch_tasks),
+        u64ForPrint(result.batch_break_task_gap),
+        u64ForPrint(result.batch_break_image_mismatch),
+        u64ForPrint(result.batch_break_invalid_bounds),
+        u64ForPrint(result.batch_break_overlap),
         u64ForPrint(result.upload_bytes),
+        u64ForPrint(result.calls_bytes),
+        u64ForPrint(result.segments_bytes),
+        u64ForPrint(result.tasks_bytes),
+        u64ForPrint(result.segment_indices_bytes),
         @as(c_int, @intCast(fallbackName(result.fallback).len)),
         cString(fallbackName(result.fallback)),
     );

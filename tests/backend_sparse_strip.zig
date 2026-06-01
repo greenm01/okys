@@ -15,6 +15,7 @@ const image_ops = okys.ops.image;
 const paint_ops = okys.ops.paint;
 const path_ops = okys.ops.path;
 const render_ops = okys.ops.render;
+const sokol_device = okys.render.sokol_device;
 
 const disabled_scissor: color.Scissor = .{
     .xform = .{ 0, 0, 0, 0, 0, 0 },
@@ -188,8 +189,12 @@ test "sparse GPU fine packet encodes solid Fill and AlphaFill tasks by call" {
     try testing.expect(packet.stats.fill_tasks > 0);
     try testing.expect(packet.stats.alpha_fill_tasks > 0);
     try testing.expectEqual(packet.tasks.items.len, packet.stats.tasks);
+    try testing.expectEqual(packet.stats.tasks, packet.stats.fill_tasks + packet.stats.alpha_fill_tasks);
+    try testing.expectEqual(packet.segment_indices.items.len, packet.stats.segment_indices);
+    try testing.expectEqual(packet.stats.upload_bytes, packet.stats.calls_bytes + packet.stats.clips_bytes + packet.stats.clip_indices_bytes + packet.stats.segments_bytes + packet.stats.tasks_bytes + packet.stats.segment_indices_bytes);
     try testing.expectEqual(packet.tasks.items.len, packet.calls.items[0].task_count);
     try testing.expectEqual(@as(u32, 0), packet.calls.items[0].task_start);
+    try testing.expectEqual(@as(usize, 1), packet.stats.nonempty_calls);
     try testing.expectEqual(@as(usize, 1), packet.stats.dispatches);
     try testing.expectEqual(packet.tasks.items.len, packet.stats.workgroups);
     try testing.expect(packet.stats.upload_bytes >= @sizeOf(sparse.gpu_fine.GpuCall) + @sizeOf(sparse.gpu_fine.GpuFineTask));
@@ -218,14 +223,68 @@ test "sparse GPU fine packet packs adjacent fill tiles into spans" {
     try testing.expect(backend.buildGpuFinePacket(&packet, null));
 
     var saw_two_tile_span = false;
+    var fill_span_tiles: usize = 0;
+    var max_fill_span_tiles: usize = 0;
     for (packet.tasks.items) |task| {
         if (sparse.gpu_fine.taskIsAlpha(task)) continue;
         try testing.expect(sparse.gpu_fine.taskIsFillSpan(task));
-        try testing.expect(sparse.gpu_fine.taskFillTileCount(task) >= 1);
-        try testing.expect(sparse.gpu_fine.taskFillTileCount(task) <= 2);
-        if (sparse.gpu_fine.taskFillTileCount(task) == 2) saw_two_tile_span = true;
+        const tile_count = sparse.gpu_fine.taskFillTileCount(task);
+        try testing.expect(tile_count >= 1);
+        try testing.expect(tile_count <= 2);
+        fill_span_tiles += tile_count;
+        max_fill_span_tiles = @max(max_fill_span_tiles, tile_count);
+        if (tile_count == 2) saw_two_tile_span = true;
     }
     try testing.expect(saw_two_tile_span);
+    try testing.expectEqual(fill_span_tiles, packet.stats.fill_span_tiles);
+    try testing.expectEqual(max_fill_span_tiles, packet.stats.max_fill_span_tiles);
+}
+
+test "sparse fine batch analyzer groups adjacent non-overlapping calls" {
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+
+    try packet.calls.append(testing.allocator, batchCall(0, 2, .{ 0, 0, 4, 4 }, 0));
+    try packet.calls.append(testing.allocator, batchCall(2, 3, .{ 8, 0, 12, 4 }, 0));
+    try packet.calls.append(testing.allocator, batchCall(5, 1, .{ 16, 0, 20, 4 }, 0));
+
+    const stats = sokol_device.analyzeSparseFineBatches(&packet);
+    try testing.expectEqual(@as(usize, 1), stats.groups);
+    try testing.expectEqual(@as(usize, 1), stats.dispatches);
+    try testing.expectEqual(@as(usize, 3), stats.calls);
+    try testing.expectEqual(@as(usize, 6), stats.tasks);
+    try testing.expectEqual(@as(usize, 3), stats.max_calls);
+    try testing.expectEqual(@as(usize, 6), stats.max_tasks);
+    try testing.expectEqual(@as(usize, 0), stats.break_task_gap);
+    try testing.expectEqual(@as(usize, 0), stats.break_image_mismatch);
+    try testing.expectEqual(@as(usize, 0), stats.break_invalid_bounds);
+    try testing.expectEqual(@as(usize, 0), stats.break_overlap);
+}
+
+test "sparse fine batch analyzer reports break reasons" {
+    var packet: sparse.gpu_fine.Packet = .{};
+    defer packet.deinit(testing.allocator);
+
+    try packet.calls.append(testing.allocator, batchCall(0, 2, .{ 0, 0, 4, 4 }, 0));
+    try packet.calls.append(testing.allocator, batchCall(3, 1, .{ 8, 0, 12, 4 }, 0));
+    try packet.calls.append(testing.allocator, batchCall(4, 1, .{ 16, 0, 20, 4 }, 0));
+    try packet.calls.append(testing.allocator, batchCall(5, 1, .{ 24, 0, 28, 4 }, 1));
+    try packet.calls.append(testing.allocator, batchCall(6, 1, .{ 32, 0, 36, 4 }, 1));
+    try packet.calls.append(testing.allocator, batchCall(7, 1, .{ 40, 0, 40, 4 }, 1));
+    try packet.calls.append(testing.allocator, batchCall(8, 1, .{ 48, 0, 56, 4 }, 1));
+    try packet.calls.append(testing.allocator, batchCall(9, 1, .{ 52, 0, 60, 4 }, 1));
+
+    const stats = sokol_device.analyzeSparseFineBatches(&packet);
+    try testing.expectEqual(@as(usize, 6), stats.groups);
+    try testing.expectEqual(@as(usize, 6), stats.dispatches);
+    try testing.expectEqual(@as(usize, 8), stats.calls);
+    try testing.expectEqual(@as(usize, 9), stats.tasks);
+    try testing.expectEqual(@as(usize, 2), stats.max_calls);
+    try testing.expectEqual(@as(usize, 2), stats.max_tasks);
+    try testing.expectEqual(@as(usize, 1), stats.break_task_gap);
+    try testing.expectEqual(@as(usize, 1), stats.break_image_mismatch);
+    try testing.expectEqual(@as(usize, 2), stats.break_invalid_bounds);
+    try testing.expectEqual(@as(usize, 1), stats.break_overlap);
 }
 
 test "sparse GPU fine packet preserves per-call draw-order ranges" {
@@ -932,6 +991,15 @@ fn queuePaintRect(iface: *const okys.render.interface.RenderInterface, paint: co
     };
     const paths = [_]PathRange{.{ .point_start = 0, .point_count = 4, .closed = true, .convex = true }};
     iface.fill(iface.ctx, &paint, &scissor, .{ x0, y0, x1, y1 }, &paths, &points);
+}
+
+fn batchCall(task_start: u32, task_count: u32, bounds: [4]f32, image_id: u32) sparse.gpu_fine.GpuCall {
+    return .{
+        .task_start = task_start,
+        .task_count = task_count,
+        .bounds = bounds,
+        .image_id = image_id,
+    };
 }
 
 fn pushClipRect(iface: *const okys.render.interface.RenderInterface, x0: f32, y0: f32, x1: f32, y1: f32, rule: okys.types.path.ClipRule) void {

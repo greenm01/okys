@@ -140,7 +140,79 @@ pub const SparseFineSubmitTiming = struct {
     tasks: usize = 0,
     dispatches: usize = 0,
     upload_bytes: usize = 0,
+    nonempty_calls: usize = 0,
+    fill_tasks: usize = 0,
+    alpha_fill_tasks: usize = 0,
+    segment_indices: usize = 0,
+    fill_span_tiles: usize = 0,
+    max_fill_span_tiles: usize = 0,
+    calls_bytes: usize = 0,
+    segments_bytes: usize = 0,
+    tasks_bytes: usize = 0,
+    segment_indices_bytes: usize = 0,
+    batch_groups: usize = 0,
+    batch_dispatches: usize = 0,
+    batch_calls: usize = 0,
+    batch_tasks: usize = 0,
+    max_batch_calls: usize = 0,
+    max_batch_tasks: usize = 0,
+    batch_break_task_gap: usize = 0,
+    batch_break_image_mismatch: usize = 0,
+    batch_break_invalid_bounds: usize = 0,
+    batch_break_overlap: usize = 0,
 };
+
+pub const SparseFineBatchStats = struct {
+    groups: usize = 0,
+    dispatches: usize = 0,
+    calls: usize = 0,
+    tasks: usize = 0,
+    max_calls: usize = 0,
+    max_tasks: usize = 0,
+    break_task_gap: usize = 0,
+    break_image_mismatch: usize = 0,
+    break_invalid_bounds: usize = 0,
+    break_overlap: usize = 0,
+
+    fn recordBreak(self: *SparseFineBatchStats, reason: SparseBatchBreakReason) void {
+        switch (reason) {
+            .task_gap => self.break_task_gap += 1,
+            .image_mismatch => self.break_image_mismatch += 1,
+            .invalid_bounds => self.break_invalid_bounds += 1,
+            .overlap => self.break_overlap += 1,
+        }
+    }
+};
+
+pub fn sparseFineSubmitTimingForPacket(packet: *const gpu_fine.Packet, dispatches: usize) SparseFineSubmitTiming {
+    const batch_stats = analyzeSparseFineBatches(packet);
+    return .{
+        .calls = packet.calls.items.len,
+        .tasks = packet.tasks.items.len,
+        .dispatches = dispatches,
+        .upload_bytes = packet.stats.upload_bytes,
+        .nonempty_calls = packet.stats.nonempty_calls,
+        .fill_tasks = packet.stats.fill_tasks,
+        .alpha_fill_tasks = packet.stats.alpha_fill_tasks,
+        .segment_indices = packet.stats.segment_indices,
+        .fill_span_tiles = packet.stats.fill_span_tiles,
+        .max_fill_span_tiles = packet.stats.max_fill_span_tiles,
+        .calls_bytes = packet.stats.calls_bytes,
+        .segments_bytes = packet.stats.segments_bytes,
+        .tasks_bytes = packet.stats.tasks_bytes,
+        .segment_indices_bytes = packet.stats.segment_indices_bytes,
+        .batch_groups = batch_stats.groups,
+        .batch_dispatches = batch_stats.dispatches,
+        .batch_calls = batch_stats.calls,
+        .batch_tasks = batch_stats.tasks,
+        .max_batch_calls = batch_stats.max_calls,
+        .max_batch_tasks = batch_stats.max_tasks,
+        .batch_break_task_gap = batch_stats.break_task_gap,
+        .batch_break_image_mismatch = batch_stats.break_image_mismatch,
+        .batch_break_invalid_bounds = batch_stats.break_invalid_bounds,
+        .batch_break_overlap = batch_stats.break_overlap,
+    };
+}
 
 pub fn webgpuDesc(device: *const anyopaque, color_format: PixelFormat) Desc {
     return .{
@@ -599,12 +671,7 @@ pub const Device = struct {
         timing: *SparseFineSubmitTiming,
     ) bool {
         const total_start = nowNs();
-        timing.* = .{
-            .calls = packet.calls.items.len,
-            .tasks = packet.tasks.items.len,
-            .dispatches = packet.stats.dispatches,
-            .upload_bytes = packet.stats.upload_bytes,
-        };
+        timing.* = sparseFineSubmitTimingForPacket(packet, packet.stats.dispatches);
         defer timing.total_ns = elapsedSince(total_start);
 
         if (!self.prepareSparseFineTextureTimed(packet, textures, surface_width, surface_height, timing)) {
@@ -633,12 +700,7 @@ pub const Device = struct {
         timing: *SparseFineSubmitTiming,
     ) bool {
         const total_start = nowNs();
-        timing.* = .{
-            .calls = packet.calls.items.len,
-            .tasks = packet.tasks.items.len,
-            .dispatches = 1,
-            .upload_bytes = packet.stats.upload_bytes,
-        };
+        timing.* = sparseFineSubmitTimingForPacket(packet, 1);
         defer timing.total_ns = elapsedSince(total_start);
 
         if (!self.prepareSparseFineTextureTimed(packet, textures, surface_width, surface_height, timing)) {
@@ -1148,28 +1210,6 @@ pub const Device = struct {
         return .{ .view = self.path_default_view };
     }
 
-    fn canBatchSparseCall(group: []const gpu_fine.GpuCall, candidate: gpu_fine.GpuCall, expected_task_start: u32) bool {
-        if (candidate.task_start != expected_task_start) return false;
-        if (group.len == 0) return false;
-        if (candidate.image_id != group[0].image_id) return false;
-        if (!validBounds(candidate.bounds)) return false;
-
-        for (group) |call| {
-            if (call.task_count == 0) continue;
-            if (!validBounds(call.bounds)) return false;
-            if (boundsOverlap(call.bounds, candidate.bounds)) return false;
-        }
-        return true;
-    }
-
-    fn validBounds(bounds: [4]f32) bool {
-        return bounds[0] < bounds[2] and bounds[1] < bounds[3];
-    }
-
-    fn boundsOverlap(a: [4]f32, b: [4]f32) bool {
-        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3];
-    }
-
     fn ensurePathResources(self: *Device, vertex_capacity: usize, index_capacity: usize) void {
         const index_count = @max(index_capacity, 1);
         const missing = self.path_stencil_shader.id == 0 or
@@ -1299,6 +1339,82 @@ pub const Device = struct {
         };
     }
 };
+
+pub fn analyzeSparseFineBatches(packet: *const gpu_fine.Packet) SparseFineBatchStats {
+    var stats: SparseFineBatchStats = .{};
+    var call_index: usize = 0;
+    while (call_index < packet.calls.items.len) {
+        const call = packet.calls.items[call_index];
+        call_index += 1;
+        if (call.task_count == 0) continue;
+
+        const group_task_start = call.task_start;
+        var group_task_count = call.task_count;
+        var group_call_count: usize = 1;
+        var group_end = call_index;
+        while (group_end < packet.calls.items.len) : (group_end += 1) {
+            const next = packet.calls.items[group_end];
+            if (next.task_count == 0) continue;
+            const reason = sparseBatchBreakReason(
+                packet.calls.items[call_index - 1 .. group_end],
+                next,
+                group_task_start + group_task_count,
+            ) orelse {
+                group_task_count += next.task_count;
+                group_call_count += 1;
+                continue;
+            };
+            stats.recordBreak(reason);
+            break;
+        }
+        call_index = group_end;
+
+        stats.groups += 1;
+        stats.calls += group_call_count;
+        stats.tasks += group_task_count;
+        stats.max_calls = @max(stats.max_calls, group_call_count);
+        stats.max_tasks = @max(stats.max_tasks, group_task_count);
+        stats.dispatches += dispatchChunksForTasks(group_task_count);
+    }
+    return stats;
+}
+
+const SparseBatchBreakReason = enum {
+    task_gap,
+    image_mismatch,
+    invalid_bounds,
+    overlap,
+};
+
+fn canBatchSparseCall(group: []const gpu_fine.GpuCall, candidate: gpu_fine.GpuCall, expected_task_start: u32) bool {
+    return sparseBatchBreakReason(group, candidate, expected_task_start) == null;
+}
+
+fn sparseBatchBreakReason(group: []const gpu_fine.GpuCall, candidate: gpu_fine.GpuCall, expected_task_start: u32) ?SparseBatchBreakReason {
+    if (candidate.task_start != expected_task_start) return .task_gap;
+    if (group.len == 0) return .task_gap;
+    if (candidate.image_id != group[0].image_id) return .image_mismatch;
+    if (!validBounds(candidate.bounds)) return .invalid_bounds;
+
+    for (group) |call| {
+        if (call.task_count == 0) continue;
+        if (!validBounds(call.bounds)) return .invalid_bounds;
+        if (boundsOverlap(call.bounds, candidate.bounds)) return .overlap;
+    }
+    return null;
+}
+
+fn dispatchChunksForTasks(task_count: u32) usize {
+    return (@as(usize, task_count) + max_compute_dispatch_groups_per_axis - 1) / max_compute_dispatch_groups_per_axis;
+}
+
+fn validBounds(bounds: [4]f32) bool {
+    return bounds[0] < bounds[2] and bounds[1] < bounds[3];
+}
+
+fn boundsOverlap(a: [4]f32, b: [4]f32) bool {
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3];
+}
 
 fn loadGlFns() ?GlFns {
     var lib = openGlLibrary() orelse return null;

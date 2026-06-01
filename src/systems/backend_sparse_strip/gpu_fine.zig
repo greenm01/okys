@@ -110,14 +110,25 @@ pub const PacketStats = struct {
     supported: bool = false,
     fallback_reason: FallbackReason = .none,
     calls: usize = 0,
+    nonempty_calls: usize = 0,
     clips: usize = 0,
     clip_indices: usize = 0,
+    segments: usize = 0,
+    segment_indices: usize = 0,
     tasks: usize = 0,
     fill_tasks: usize = 0,
     alpha_fill_tasks: usize = 0,
+    fill_span_tiles: usize = 0,
+    max_fill_span_tiles: usize = 0,
     dispatches: usize = 0,
     workgroups: usize = 0,
     upload_bytes: usize = 0,
+    calls_bytes: usize = 0,
+    clips_bytes: usize = 0,
+    clip_indices_bytes: usize = 0,
+    segments_bytes: usize = 0,
+    tasks_bytes: usize = 0,
+    segment_indices_bytes: usize = 0,
 };
 
 pub const Profile = struct {
@@ -244,6 +255,7 @@ pub fn build(
     packet.stats.calls = calls.len;
     packet.stats.clips = clips.len;
     packet.stats.clip_indices = call_clip_indices.len;
+    packet.stats.segments = segments.len;
     try packet.calls.ensureTotalCapacity(gpa, calls.len);
     try packet.clips.ensureTotalCapacity(gpa, clips.len);
     try packet.clip_indices.ensureTotalCapacity(gpa, call_clip_indices.len);
@@ -343,19 +355,29 @@ pub fn build(
         const task_count = packet.tasks.items.len - task_start;
         packet.calls.items[call_index_usize].task_start = @intCast(task_start);
         packet.calls.items[call_index_usize].task_count = @intCast(task_count);
-        if (task_count > 0) packet.stats.dispatches += 1;
+        if (task_count > 0) {
+            packet.stats.nonempty_calls += 1;
+            packet.stats.dispatches += 1;
+        }
     }
 
     packet.stats.supported = true;
     packet.stats.tasks = packet.tasks.items.len;
     packet.stats.workgroups = packet.tasks.items.len;
+    packet.stats.segment_indices = packet.segment_indices.items.len;
+    packet.stats.calls_bytes = @sizeOf(GpuCall) * packet.calls.items.len;
+    packet.stats.clips_bytes = @sizeOf(GpuClip) * packet.clips.items.len;
+    packet.stats.clip_indices_bytes = @sizeOf(GpuClipIndex) * packet.clip_indices.items.len;
+    packet.stats.segments_bytes = @sizeOf(GpuSegment) * packet.segments.items.len;
+    packet.stats.tasks_bytes = @sizeOf(GpuFineTask) * packet.tasks.items.len;
+    packet.stats.segment_indices_bytes = @sizeOf(GpuSegmentIndex) * packet.segment_indices.items.len;
     packet.stats.upload_bytes =
-        @sizeOf(GpuCall) * packet.calls.items.len +
-        @sizeOf(GpuClip) * packet.clips.items.len +
-        @sizeOf(GpuClipIndex) * packet.clip_indices.items.len +
-        @sizeOf(GpuSegment) * packet.segments.items.len +
-        @sizeOf(GpuFineTask) * packet.tasks.items.len +
-        @sizeOf(GpuSegmentIndex) * packet.segment_indices.items.len;
+        packet.stats.calls_bytes +
+        packet.stats.clips_bytes +
+        packet.stats.clip_indices_bytes +
+        packet.stats.segments_bytes +
+        packet.stats.tasks_bytes +
+        packet.stats.segment_indices_bytes;
     packet.scratch.clearBoundaryMask();
     return true;
 }
@@ -906,6 +928,8 @@ fn appendPendingFillSpan(
         span_count.*,
     ));
     stats.fill_tasks += 1;
+    stats.fill_span_tiles += span_count.*;
+    stats.max_fill_span_tiles = @max(stats.max_fill_span_tiles, span_count.*);
     span_count.* = 0;
 }
 
