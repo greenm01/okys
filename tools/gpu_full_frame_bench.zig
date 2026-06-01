@@ -20,6 +20,38 @@ const frame_limit = warmup_frames + measured_frames;
 const scene_width_u32: u32 = @intFromFloat(bench_scenes.scene_width);
 const scene_height_u32: u32 = @intFromFloat(bench_scenes.scene_height);
 
+const TimingMode = enum(u8) {
+    full_frame = 0,
+    texture = 1,
+    empty = 2,
+    upload = 3,
+    clear = 4,
+
+    fn label(self: TimingMode) [:0]const u8 {
+        return switch (self) {
+            .full_frame => "gpu_full_frame",
+            .texture => "gpu_texture",
+            .empty => "gpu_empty",
+            .upload => "gpu_upload",
+            .clear => "gpu_clear",
+        };
+    }
+
+    fn title(self: TimingMode) [:0]const u8 {
+        return switch (self) {
+            .full_frame => "Okys Tiger full-frame GPU benchmark",
+            .texture => "Okys Tiger texture GPU benchmark",
+            .empty => "Okys Tiger empty GPU benchmark",
+            .upload => "Okys Tiger GPU upload benchmark",
+            .clear => "Okys Tiger GPU clear benchmark",
+        };
+    }
+
+    fn needsPacket(self: TimingMode) bool {
+        return self != .empty;
+    }
+};
+
 const Accumulator = struct {
     frame_ns: u128 = 0,
     frontend_ns: u128 = 0,
@@ -121,7 +153,7 @@ var backend: ?*SparseBackend = null;
 var packet: GpuFinePacket = .{};
 var frame_index: usize = 0;
 var accum: Accumulator = .{};
-const texture_only = gpu_full_frame_options.texture_only;
+const timing_mode: TimingMode = @enumFromInt(gpu_full_frame_options.timing_mode);
 
 pub fn main() void {
     printHeader();
@@ -134,7 +166,7 @@ pub fn main() void {
         .sample_count = 1,
         .swap_interval = 0,
         .high_dpi = false,
-        .window_title = if (texture_only) "Okys Tiger texture GPU benchmark" else "Okys Tiger full-frame GPU benchmark",
+        .window_title = timing_mode.title(),
     });
     if (failed) std.process.exit(1);
 }
@@ -162,63 +194,92 @@ fn init() callconv(.c) void {
 fn frame() callconv(.c) void {
     if (failed) return;
 
-    const context = ctx orelse {
-        fail("missing context", .{});
-        return;
-    };
-    const sparse_backend = backend orelse {
-        fail("missing sparse backend", .{});
-        return;
-    };
-
     device.resize(bench_scenes.scene_width, bench_scenes.scene_height, 1);
-    sparse_backend.clearQueued();
 
     const frame_start = nowNs();
 
-    const frontend_start = nowNs();
-    frame_ops.beginFrame(context, bench_scenes.scene_width, bench_scenes.scene_height, 1);
-    bench_scenes.drawTigerScene(context, .none);
-    frame_ops.cancelFrame(context);
-    const frontend_ns = nowNs() - frontend_start;
-
+    var frontend_ns: u64 = 0;
+    var build_ns: u64 = 0;
     var profile: okys.systems.backend_sparse_strip.Profile = .{};
-    const build_start = nowNs();
-    if (!sparse_backend.buildGpuFinePacket(&packet, &profile)) {
-        fail("sparse GPU packet build failed", .{});
-        return;
+    if (timing_mode.needsPacket()) {
+        const context = ctx orelse {
+            fail("missing context", .{});
+            return;
+        };
+        const sparse_backend = backend orelse {
+            fail("missing sparse backend", .{});
+            return;
+        };
+        sparse_backend.clearQueued();
+
+        const frontend_start = nowNs();
+        frame_ops.beginFrame(context, bench_scenes.scene_width, bench_scenes.scene_height, 1);
+        bench_scenes.drawTigerScene(context, .none);
+        frame_ops.cancelFrame(context);
+        frontend_ns = nowNs() - frontend_start;
+
+        const build_start = nowNs();
+        if (!sparse_backend.buildGpuFinePacket(&packet, &profile)) {
+            fail("sparse GPU packet build failed", .{});
+            return;
+        }
+        build_ns = nowNs() - build_start;
     }
-    const build_ns = nowNs() - build_start;
 
     var timing: sokol_device.SparseFineSubmitTiming = .{};
-    const drew = if (texture_only) device.drawSparseFineTextureTimed(
-        &packet,
-        &.{},
-        scene_width_u32,
-        scene_height_u32,
-        &timing,
-    ) else blk: {
-        const pass = sokol_device.swapchainPassWithAction(
-            sokol_device.clearPassAction(.{ .r = 0.08, .g = 0.09, .b = 0.10, .a = 1.0 }),
-            glue.swapchain(),
-        );
-        break :blk device.drawSparseFineSurfaceTimed(
-            pass,
+    const drew = switch (timing_mode) {
+        .empty => blk: {
+            timing.ok = true;
+            break :blk true;
+        },
+        .upload => device.uploadSparseFineTextureTimed(
             &packet,
-            sparse_backend.segments.items,
             &.{},
             scene_width_u32,
             scene_height_u32,
-            .{
-                .x = 0,
-                .y = 0,
-                .width = bench_scenes.scene_width,
-                .height = bench_scenes.scene_height,
-            },
-            bench_scenes.scene_width,
-            bench_scenes.scene_height,
             &timing,
-        );
+        ),
+        .clear => device.clearSparseFineTextureTimed(
+            &packet,
+            &.{},
+            scene_width_u32,
+            scene_height_u32,
+            &timing,
+        ),
+        .texture => device.drawSparseFineTextureTimed(
+            &packet,
+            &.{},
+            scene_width_u32,
+            scene_height_u32,
+            &timing,
+        ),
+        .full_frame => blk: {
+            const sparse_backend = backend orelse {
+                fail("missing sparse backend", .{});
+                return;
+            };
+            const pass = sokol_device.swapchainPassWithAction(
+                sokol_device.clearPassAction(.{ .r = 0.08, .g = 0.09, .b = 0.10, .a = 1.0 }),
+                glue.swapchain(),
+            );
+            break :blk device.drawSparseFineSurfaceTimed(
+                pass,
+                &packet,
+                sparse_backend.segments.items,
+                &.{},
+                scene_width_u32,
+                scene_height_u32,
+                .{
+                    .x = 0,
+                    .y = 0,
+                    .width = bench_scenes.scene_width,
+                    .height = bench_scenes.scene_height,
+                },
+                bench_scenes.scene_width,
+                bench_scenes.scene_height,
+                &timing,
+            );
+        },
     };
     if (!drew or timing.fallback != .none) {
         fail("sparse GPU fallback: {s}", .{fallbackName(timing.fallback)});
@@ -281,7 +342,7 @@ fn printResult(result: Accumulator) void {
     const submit_avg = cpu_encode_avg + commit_avg;
     const gpu_wait_avg = if (result.gpu_wait_samples > 0) @as(u64, @intCast(result.gpu_wait_ns / result.gpu_wait_samples)) else 0;
     const scene_name = "ghostscript_tiger";
-    const timing_scope = if (texture_only) "gpu_texture" else "gpu_full_frame";
+    const timing_scope = timing_mode.label();
     _ = std.c.printf(
         "%.*s\tsparse_strip\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
         @as(c_int, @intCast(scene_name.len)),

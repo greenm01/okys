@@ -526,69 +526,15 @@ pub const Device = struct {
         timing: *SparseFineSubmitTiming,
     ) bool {
         const total_start = nowNs();
-        timing.* = .{
-            .calls = packet.calls.items.len,
-            .tasks = packet.tasks.items.len,
-            .dispatches = packet.stats.dispatches,
-            .upload_bytes = packet.stats.upload_bytes,
-        };
         defer timing.total_ns = elapsedSince(total_start);
 
-        if (!packet.stats.supported) {
-            timing.fallback = .unsupported_packet;
+        if (!self.uploadSparseFineTextureTimed(packet, textures, surface_width, surface_height, timing)) {
             return false;
         }
-        if (surface_width == 0 or surface_height == 0) {
-            timing.fallback = .empty_surface;
-            return false;
-        }
-        if (packet.calls.items.len == 0 or packet.tasks.items.len == 0) {
-            timing.fallback = .empty_packet;
-            return false;
-        }
-
-        const resource_start = nowNs();
-        self.ensurePathTextureResources(textures);
-        if (!self.sparseTexturesAvailable(packet)) {
-            timing.resource_ns = elapsedSince(resource_start);
-            timing.fallback = .missing_texture;
-            return false;
-        }
-
-        self.ensureSparseFineResources(surface_width, surface_height, packet);
-        timing.resource_ns = elapsedSince(resource_start);
-        if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) {
-            timing.fallback = .missing_resources;
-            return false;
-        }
-        if (self.sparse_surface_storage_view.id == 0 or self.sparse_surface_texture_view.id == 0) {
-            timing.fallback = .missing_resources;
-            return false;
-        }
-        if (self.path_texture_sampler.id == 0 or self.path_default_view.id == 0) {
-            timing.fallback = .missing_resources;
-            return false;
-        }
-
-        const upload_start = nowNs();
-        uploadStorageBuffer(gpu_fine.GpuCall, self.sparse_call_buffer.buffer, packet.calls.items);
-        uploadStorageBuffer(gpu_fine.GpuClip, self.sparse_clip_buffer.buffer, packet.clips.items);
-        uploadStorageBuffer(gpu_fine.GpuClipIndex, self.sparse_clip_index_buffer.buffer, packet.clip_indices.items);
-        uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
-        uploadStorageBuffer(gpu_fine.GpuSegmentIndex, self.sparse_segment_index_buffer.buffer, packet.segment_indices.items);
-        uploadStorageBuffer(gpu_fine.GpuSegment, self.sparse_segment_buffer.buffer, packet.segments.items);
-        timing.upload_ns = elapsedSince(upload_start);
 
         const compute_start = nowNs();
         sg.beginPass(.{ .compute = true, .label = "okys_sparse_fine_compute" });
-        sg.applyPipeline(self.sparse_clear_pipeline);
-        sg.applyBindings(sparseClearBindings(self.sparse_surface_storage_view));
-        const clear_params: SparseClearParams = .{
-            .surface_width = @intCast(surface_width),
-            .surface_height = @intCast(surface_height),
-        };
-        sg.applyUniforms(sparse_clear_params_slot, rangeFromValue(SparseClearParams, &clear_params));
-        sg.dispatch(dispatchGroups(surface_width, 8), dispatchGroups(surface_height, 8), 1);
+        self.encodeSparseFineClear(surface_width, surface_height);
 
         sg.applyPipeline(self.sparse_fine_pipeline);
         var encoded_dispatches: usize = 0;
@@ -642,6 +588,128 @@ pub const Device = struct {
 
         timing.ok = true;
         return true;
+    }
+
+    pub fn uploadSparseFineTextureTimed(
+        self: *Device,
+        packet: *const gpu_fine.Packet,
+        textures: []const PathTexture,
+        surface_width: u32,
+        surface_height: u32,
+        timing: *SparseFineSubmitTiming,
+    ) bool {
+        const total_start = nowNs();
+        timing.* = .{
+            .calls = packet.calls.items.len,
+            .tasks = packet.tasks.items.len,
+            .dispatches = packet.stats.dispatches,
+            .upload_bytes = packet.stats.upload_bytes,
+        };
+        defer timing.total_ns = elapsedSince(total_start);
+
+        if (!self.prepareSparseFineTextureTimed(packet, textures, surface_width, surface_height, timing)) {
+            return false;
+        }
+
+        const upload_start = nowNs();
+        uploadStorageBuffer(gpu_fine.GpuCall, self.sparse_call_buffer.buffer, packet.calls.items);
+        uploadStorageBuffer(gpu_fine.GpuClip, self.sparse_clip_buffer.buffer, packet.clips.items);
+        uploadStorageBuffer(gpu_fine.GpuClipIndex, self.sparse_clip_index_buffer.buffer, packet.clip_indices.items);
+        uploadStorageBuffer(gpu_fine.GpuFineTask, self.sparse_task_buffer.buffer, packet.tasks.items);
+        uploadStorageBuffer(gpu_fine.GpuSegmentIndex, self.sparse_segment_index_buffer.buffer, packet.segment_indices.items);
+        uploadStorageBuffer(gpu_fine.GpuSegment, self.sparse_segment_buffer.buffer, packet.segments.items);
+        timing.upload_ns = elapsedSince(upload_start);
+
+        timing.ok = true;
+        return true;
+    }
+
+    pub fn clearSparseFineTextureTimed(
+        self: *Device,
+        packet: *const gpu_fine.Packet,
+        textures: []const PathTexture,
+        surface_width: u32,
+        surface_height: u32,
+        timing: *SparseFineSubmitTiming,
+    ) bool {
+        const total_start = nowNs();
+        timing.* = .{
+            .calls = packet.calls.items.len,
+            .tasks = packet.tasks.items.len,
+            .dispatches = 1,
+            .upload_bytes = packet.stats.upload_bytes,
+        };
+        defer timing.total_ns = elapsedSince(total_start);
+
+        if (!self.prepareSparseFineTextureTimed(packet, textures, surface_width, surface_height, timing)) {
+            return false;
+        }
+
+        const compute_start = nowNs();
+        sg.beginPass(.{ .compute = true, .label = "okys_sparse_fine_clear" });
+        self.encodeSparseFineClear(surface_width, surface_height);
+        sg.endPass();
+        timing.compute_encode_ns = elapsedSince(compute_start);
+
+        timing.ok = true;
+        return true;
+    }
+
+    fn prepareSparseFineTextureTimed(
+        self: *Device,
+        packet: *const gpu_fine.Packet,
+        textures: []const PathTexture,
+        surface_width: u32,
+        surface_height: u32,
+        timing: *SparseFineSubmitTiming,
+    ) bool {
+        if (!packet.stats.supported) {
+            timing.fallback = .unsupported_packet;
+            return false;
+        }
+        if (surface_width == 0 or surface_height == 0) {
+            timing.fallback = .empty_surface;
+            return false;
+        }
+        if (packet.calls.items.len == 0 or packet.tasks.items.len == 0) {
+            timing.fallback = .empty_packet;
+            return false;
+        }
+
+        const resource_start = nowNs();
+        self.ensurePathTextureResources(textures);
+        if (!self.sparseTexturesAvailable(packet)) {
+            timing.resource_ns = elapsedSince(resource_start);
+            timing.fallback = .missing_texture;
+            return false;
+        }
+
+        self.ensureSparseFineResources(surface_width, surface_height, packet);
+        timing.resource_ns = elapsedSince(resource_start);
+        if (self.sparse_clear_pipeline.id == 0 or self.sparse_fine_pipeline.id == 0) {
+            timing.fallback = .missing_resources;
+            return false;
+        }
+        if (self.sparse_surface_storage_view.id == 0 or self.sparse_surface_texture_view.id == 0) {
+            timing.fallback = .missing_resources;
+            return false;
+        }
+        if (self.path_texture_sampler.id == 0 or self.path_default_view.id == 0) {
+            timing.fallback = .missing_resources;
+            return false;
+        }
+        return true;
+    }
+
+    fn encodeSparseFineClear(self: *Device, surface_width: u32, surface_height: u32) void {
+        sg.applyPipeline(self.sparse_clear_pipeline);
+        sg.applyBindings(sparseClearBindings(self.sparse_surface_storage_view));
+        const clear_params: SparseClearParams = .{
+            .surface_width = @intCast(surface_width),
+            .surface_height = @intCast(surface_height),
+        };
+        sg.applyUniforms(sparse_clear_params_slot, rangeFromValue(SparseClearParams, &clear_params));
+        sg.dispatch(dispatchGroups(surface_width, 8), dispatchGroups(surface_height, 8), 1);
     }
 
     pub fn readPixelsGL(
