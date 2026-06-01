@@ -251,6 +251,37 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_full_frame_bench_mod.addImport("okys", okys_mod);
     tiger_gpu_full_frame_bench_mod.addImport("sokol", mod_sokol);
     tiger_gpu_full_frame_bench_mod.addImport("bench_scenes", bench_scenes_mod);
+    const gpu_fence_wait_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gpu_fence_wait.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    gpu_fence_wait_mod.addImport("okys", okys_mod);
+    gpu_fence_wait_mod.addImport("sokol", mod_sokol);
+    tiger_gpu_full_frame_bench_mod.addImport("gpu_fence_wait", gpu_fence_wait_mod);
+    if (with_wgpu) {
+        if (webgpu_include) |include_path| {
+            tiger_gpu_full_frame_bench_mod.addSystemIncludePath(.{ .cwd_relative = include_path });
+        } else {
+            tiger_gpu_full_frame_bench_mod.addSystemIncludePath(b.path("vendor/webgpu/include"));
+        }
+        tiger_gpu_full_frame_bench_mod.addCSourceFile(.{
+            .file = b.path("tools/gpu_fence_wait_wgpu.c"),
+            .flags = &.{ "-std=c11", "-DOKYS_ENABLE_WGPU_FENCE=1" },
+        });
+    } else {
+        tiger_gpu_full_frame_bench_mod.addCSourceFile(.{
+            .file = b.path("tools/gpu_fence_wait_wgpu.c"),
+            .flags = &.{ "-std=c11", "-DOKYS_ENABLE_WGPU_FENCE=0" },
+        });
+    }
+    if (target.result.os.tag == .macos or target.result.os.tag == .ios or target.result.os.tag == .tvos or target.result.os.tag == .watchos) {
+        tiger_gpu_full_frame_bench_mod.addCSourceFile(.{
+            .file = b.path("tools/gpu_fence_wait_metal.m"),
+            .flags = &.{"-fobjc-arc"},
+        });
+    }
 
     const tiger_gpu_full_frame_bench = b.addExecutable(.{
         .name = "okys_gpu_full_frame_bench_tiger",
