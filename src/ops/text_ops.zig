@@ -97,7 +97,11 @@ pub fn drawGlyphTinted(ctx: *Context, id: GlyphId, x: f32, y: f32, tint: color.C
     const atlas = &ctx.glyph_atlas;
     const glyph = atlas.get(id) orelse return;
     if (atlas.image_id == .none or atlas.width == 0 or atlas.height == 0) return;
-    const paint = glyphPaint(ctx, glyph, x, y, tint);
+    // Snap the baseline to the device-pixel grid so horizontal strokes land on
+    // whole pixels (crisper, consistent across a line). Keep x fractional.
+    const dpr = if (ctx.device_pixel_ratio > 0) ctx.device_pixel_ratio else 1;
+    const sy = @round(y * dpr) / dpr;
+    const paint = glyphPaint(ctx, glyph, x, sy, tint);
     const verts = glyphVertices(ctx, glyph, paint);
     backend.triangles(backend.ctx, &paint, &ctx.state().scissor, &verts);
 }

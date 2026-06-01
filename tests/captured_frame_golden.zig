@@ -67,10 +67,12 @@ test "captured frame golden replays text clips dashes images and subrect uploads
     try testing.expectEqual(@as(usize, 1), sparse.clip_pop_count);
     try testing.expectEqual(@as(usize, 0), sparse.clip_depth);
     try testing.expect(sparse.build());
-    try expectSurfaceHash(sparse.surface.items, 0x9850978049160aa3);
+    // Re-baselined after text crispness change: 8x glyph coverage supersampling
+    // (sample_grid 4 -> 8) + per-glyph baseline snap to the device-pixel grid.
+    try expectSurfaceHash(sparse.surface.items, 0x3c3a89753d0edef1);
     try expectPixel(sparse.surface.items, 96, 3, 3, .{ 20, 26, 33, 255 });
     try expectPixel(sparse.surface.items, 96, 14, 14, .{ 169, 186, 213, 255 });
-    try expectPixel(sparse.surface.items, 96, 50, 26, .{ 144, 156, 177, 255 });
+    try expectPixel(sparse.surface.items, 96, 50, 26, .{ 141, 154, 174, 255 });
     try expectPixel(sparse.surface.items, 96, 26, 54, .{ 97, 120, 73, 255 });
 }
 

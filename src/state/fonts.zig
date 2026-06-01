@@ -8,7 +8,7 @@ const text = @import("../types/text.zig");
 const max_font_bytes = 64 * 1024 * 1024;
 const max_raster_pixels = 1024 * 1024;
 const curve_steps = 14;
-const sample_grid = 4;
+const sample_grid = 8;
 
 pub const FontGlyphId = tatfi.GlyphId;
 
