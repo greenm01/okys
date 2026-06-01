@@ -43,6 +43,20 @@ zig build test             # unit tests + C ABI smoke test
 
 Artifacts: `zig-out/lib/libokys.a` and `zig-out/include/okys.h`.
 
+## WebGPU
+
+`-Dbackend=wgpu` builds the WebGPU-flavored C ABI bridge. Okys does not create
+the WebGPU device or swapchain in this path; the host owns them and passes the
+current `WGPUTextureView` each frame through `okySetupWebGPU` /
+`okySetWebGPURenderTarget`, or through the generic `okySetupGraphics` /
+`okySetRenderTarget` calls.
+
+The standalone demos, including `zig build run-demo-tiger-spin`, use
+`sokol_app`'s selected native window backend. On macOS that is Metal when built
+with `-Dbackend=native`, so the standalone tiger demo is not WebGPU evidence.
+Do not expect `zig build -Dbackend=wgpu demo-tiger-spin` to link unless a native
+WebGPU runtime such as Dawn or wgpu-native is also linked by the application.
+
 ## Status
 
 The C ABI, NanoVG-style front-end, stencil-cover fallback, sparse-strip CPU proof,

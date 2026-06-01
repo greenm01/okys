@@ -242,6 +242,24 @@ pub fn build(b: *std.Build) !void {
     const tiger_gpu_bench_step = b.step("gpu-bench-tiger", "Run Ghostscript Tiger sparse GPU frame-loop benchmark");
     tiger_gpu_bench_step.dependOn(&run_tiger_gpu_bench.step);
 
+    const tiger_gpu_full_frame_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gpu_full_frame_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    tiger_gpu_full_frame_bench_mod.addImport("okys", okys_mod);
+    tiger_gpu_full_frame_bench_mod.addImport("sokol", mod_sokol);
+    tiger_gpu_full_frame_bench_mod.addImport("bench_scenes", bench_scenes_mod);
+
+    const tiger_gpu_full_frame_bench = b.addExecutable(.{
+        .name = "okys_gpu_full_frame_bench_tiger",
+        .root_module = tiger_gpu_full_frame_bench_mod,
+    });
+    const run_tiger_gpu_full_frame_bench = b.addRunArtifact(tiger_gpu_full_frame_bench);
+    const tiger_gpu_full_frame_bench_step = b.step("gpu-bench-tiger-full-frame", "Run Ghostscript Tiger full-frame sparse GPU benchmark");
+    tiger_gpu_full_frame_bench_step.dependOn(&run_tiger_gpu_full_frame_bench.step);
+
     const gpu_readback_smoke_mod = b.createModule(.{
         .root_source_file = b.path("tools/gpu_readback_smoke.zig"),
         .target = target,

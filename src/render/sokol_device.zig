@@ -1257,10 +1257,10 @@ fn lookupGlProc(lib: *std.DynLib, comptime T: type, name: [:0]const u8) ?T {
     if (lib.lookup(T, name)) |proc| return proc;
     const GetProcAddress = *const fn ([*:0]const u8) callconv(.c) ?*const anyopaque;
     if (lib.lookup(GetProcAddress, "glXGetProcAddressARB")) |get_proc| {
-        if (get_proc(name.ptr)) |proc| return @ptrCast(proc);
+        if (get_proc(name.ptr)) |proc| return @ptrCast(@alignCast(proc));
     }
     if (lib.lookup(GetProcAddress, "wglGetProcAddress")) |get_proc| {
-        if (get_proc(name.ptr)) |proc| return @ptrCast(proc);
+        if (get_proc(name.ptr)) |proc| return @ptrCast(@alignCast(proc));
     }
     return null;
 }
