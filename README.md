@@ -21,10 +21,14 @@ header is hand-written and is the source of truth for the ABI.
 
 ## Platforms
 
-Desktop is the target. `-Dbackend=native` lets sokol pick the platform default:
-Metal on macOS, D3D11 on Windows, and GLCORE on Linux. Linux callers can opt into
-Vulkan with `-Dbackend=vulkan`. WebGPU is an explicit bridge for hosts that
-already own a WebGPU device and current texture view.
+Desktop is the target. Downstream libraries should consume Okys through the C
+ABI rather than binding WebGPU themselves. The current WebGPU bridge accepts a
+host-provided `WGPUDevice` and current texture view; the first-release integration
+goal is an Okys-owned platform host layer so Koi/Gridmonger do not need a
+separate WebGPU package.
+
+Native Vulkan remains available for the current Linux host path, diagnostics,
+and benchmarks. GL remains useful for local smoke/golden fixtures.
 
 ## Build
 
