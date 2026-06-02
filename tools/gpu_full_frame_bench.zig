@@ -60,6 +60,7 @@ const Accumulator = struct {
     coarse_ns: u128 = 0,
     texture_views_ns: u128 = 0,
     gpu_fine_ns: u128 = 0,
+    direct_strip_estimate_ns: u128 = 0,
     gpu_pack_records_ns: u128 = 0,
     gpu_strip_group_ns: u128 = 0,
     gpu_boundary_mark_ns: u128 = 0,
@@ -100,6 +101,25 @@ const Accumulator = struct {
     segments_bytes: usize = 0,
     tasks_bytes: usize = 0,
     segment_indices_bytes: usize = 0,
+    direct_supported: bool = false,
+    direct_calls: usize = 0,
+    direct_eligible_calls: usize = 0,
+    direct_fallback_calls: usize = 0,
+    direct_fallback_images: usize = 0,
+    direct_fallback_scissors: usize = 0,
+    direct_fallback_clips: usize = 0,
+    direct_fallback_gradients: usize = 0,
+    direct_fallback_triangles: usize = 0,
+    direct_strip_instances: usize = 0,
+    direct_alpha_strip_instances: usize = 0,
+    direct_solid_span_instances: usize = 0,
+    direct_solid_span_tiles: usize = 0,
+    direct_max_solid_span_tiles: usize = 0,
+    direct_alpha_bytes: usize = 0,
+    direct_strip_instance_bytes: usize = 0,
+    direct_paint_bytes: usize = 0,
+    direct_upload_bytes: usize = 0,
+    direct_upload_savings_bytes: usize = 0,
     batch_groups: usize = 0,
     batch_dispatches: usize = 0,
     batch_calls: usize = 0,
@@ -129,6 +149,7 @@ const Accumulator = struct {
         self.coarse_ns += profile.coarse_ns;
         self.texture_views_ns += profile.texture_views_ns;
         self.gpu_fine_ns += profile.gpu_fine_ns;
+        self.direct_strip_estimate_ns += profile.direct_strip_estimate_ns;
         self.gpu_pack_records_ns += profile.gpu_fine_profile.pack_records_ns;
         self.gpu_strip_group_ns += profile.gpu_fine_profile.strip_group_ns;
         self.gpu_boundary_mark_ns += profile.gpu_fine_profile.boundary_mark_ns;
@@ -171,6 +192,25 @@ const Accumulator = struct {
         self.segments_bytes = timing.segments_bytes;
         self.tasks_bytes = timing.tasks_bytes;
         self.segment_indices_bytes = timing.segment_indices_bytes;
+        self.direct_supported = profile.direct_strip_estimate.supported;
+        self.direct_calls = profile.direct_strip_estimate.calls;
+        self.direct_eligible_calls = profile.direct_strip_estimate.eligible_calls;
+        self.direct_fallback_calls = profile.direct_strip_estimate.fallback_calls;
+        self.direct_fallback_images = profile.direct_strip_estimate.fallback_images;
+        self.direct_fallback_scissors = profile.direct_strip_estimate.fallback_scissors;
+        self.direct_fallback_clips = profile.direct_strip_estimate.fallback_clips;
+        self.direct_fallback_gradients = profile.direct_strip_estimate.fallback_gradients;
+        self.direct_fallback_triangles = profile.direct_strip_estimate.fallback_triangles;
+        self.direct_strip_instances = profile.direct_strip_estimate.strip_instances;
+        self.direct_alpha_strip_instances = profile.direct_strip_estimate.alpha_strip_instances;
+        self.direct_solid_span_instances = profile.direct_strip_estimate.solid_span_instances;
+        self.direct_solid_span_tiles = profile.direct_strip_estimate.solid_span_tiles;
+        self.direct_max_solid_span_tiles = profile.direct_strip_estimate.max_solid_span_tiles;
+        self.direct_alpha_bytes = profile.direct_strip_estimate.alpha_bytes;
+        self.direct_strip_instance_bytes = profile.direct_strip_estimate.strip_instance_bytes;
+        self.direct_paint_bytes = profile.direct_strip_estimate.paint_bytes;
+        self.direct_upload_bytes = profile.direct_strip_estimate.upload_bytes;
+        self.direct_upload_savings_bytes = profile.direct_strip_estimate.uploadSavingsVs(timing.upload_bytes);
         self.batch_groups = timing.batch_groups;
         self.batch_dispatches = timing.batch_dispatches;
         self.batch_calls = timing.batch_calls;
@@ -372,7 +412,7 @@ fn fail(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tfallback\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tdirect_strip_estimate_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tdirect_supported\tdirect_calls\tdirect_eligible_calls\tdirect_fallback_calls\tdirect_fallback_images\tdirect_fallback_scissors\tdirect_fallback_clips\tdirect_fallback_gradients\tdirect_fallback_triangles\tdirect_strip_instances\tdirect_alpha_strip_instances\tdirect_solid_span_instances\tdirect_solid_span_tiles\tdirect_max_solid_span_tiles\tdirect_alpha_bytes\tdirect_strip_instance_bytes\tdirect_paint_bytes\tdirect_upload_bytes\tdirect_upload_savings_bytes\tfallback\n");
 }
 
 fn printResult(result: Accumulator) void {
@@ -383,76 +423,101 @@ fn printResult(result: Accumulator) void {
     const gpu_wait_avg = if (result.gpu_wait_samples > 0) @as(u64, @intCast(result.gpu_wait_ns / result.gpu_wait_samples)) else 0;
     const scene_name = "ghostscript_tiger";
     const timing_scope = timing_mode.label();
-    _ = std.c.printf(
-        "%.*s\tsparse_strip\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\t%.*s\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%.*s\n",
-        @as(c_int, @intCast(scene_name.len)),
-        cString(scene_name),
-        @as(c_int, @intCast(timing_scope.len)),
-        cString(timing_scope),
-        u64ForPrint(measured_frames),
-        u64ForPrint(frame_avg),
-        u64ForPrint(submit_avg),
-        u64ForPrint(average(result.frontend_ns)),
-        u64ForPrint(average(result.build_ns)),
-        u64ForPrint(average(result.bin_ns)),
-        u64ForPrint(average(result.coarse_ns)),
-        u64ForPrint(average(result.texture_views_ns)),
-        u64ForPrint(average(result.gpu_fine_ns)),
-        u64ForPrint(average(result.gpu_pack_records_ns)),
-        u64ForPrint(average(result.gpu_strip_group_ns)),
-        u64ForPrint(average(result.gpu_boundary_mark_ns)),
-        u64ForPrint(average(result.gpu_fill_task_ns)),
-        u64ForPrint(average(result.gpu_crossing_collect_ns)),
-        u64ForPrint(average(result.gpu_crossing_sort_ns)),
-        u64ForPrint(average(result.gpu_fill_emit_ns)),
-        u64ForPrint(average(result.crossing_rows)),
-        u64ForPrint(average(result.crossing_items)),
-        u64ForPrint(average(result.crossing_sort_rows)),
-        u64ForPrint(result.max_crossings_per_row),
-        u64ForPrint(average(result.boundary_checks)),
-        u64ForPrint(average(result.boundary_hits)),
-        u64ForPrint(average(result.fill_candidates)),
-        u64ForPrint(average(result.alpha_segment_refs)),
-        u64ForPrint(result.max_alpha_segments_per_task),
-        u64ForPrint(cpu_encode_avg),
-        u64ForPrint(commit_avg),
-        u64ForPrint(average(result.resource_ns)),
-        u64ForPrint(average(result.upload_ns)),
-        u64ForPrint(average(result.compute_encode_ns)),
-        u64ForPrint(average(result.blit_encode_ns)),
-        u64ForPrint(gpu_wait_avg),
-        u64ForPrint(@intFromBool(result.gpu_wait_samples > 0)),
-        @as(c_int, @intCast(result.gpu_wait_kind.label().len)),
-        cString(result.gpu_wait_kind.label()),
-        @as(c_int, @intCast(result.gpu_wait_status.label().len)),
-        cString(result.gpu_wait_status.label()),
-        u64ForPrint(result.calls),
-        u64ForPrint(result.nonempty_calls),
-        u64ForPrint(result.tasks),
-        u64ForPrint(result.fill_tasks),
-        u64ForPrint(result.alpha_fill_tasks),
-        u64ForPrint(result.segment_indices),
-        u64ForPrint(result.fill_span_tiles),
-        u64ForPrint(result.max_fill_span_tiles),
-        u64ForPrint(result.dispatches),
-        u64ForPrint(result.batch_groups),
-        u64ForPrint(result.batch_dispatches),
-        u64ForPrint(result.batch_calls),
-        u64ForPrint(result.batch_tasks),
-        u64ForPrint(result.max_batch_calls),
-        u64ForPrint(result.max_batch_tasks),
-        u64ForPrint(result.batch_break_task_gap),
-        u64ForPrint(result.batch_break_image_mismatch),
-        u64ForPrint(result.batch_break_invalid_bounds),
-        u64ForPrint(result.batch_break_overlap),
-        u64ForPrint(result.upload_bytes),
-        u64ForPrint(result.calls_bytes),
-        u64ForPrint(result.segments_bytes),
-        u64ForPrint(result.tasks_bytes),
-        u64ForPrint(result.segment_indices_bytes),
-        @as(c_int, @intCast(fallbackName(result.fallback).len)),
-        cString(fallbackName(result.fallback)),
-    );
+    printTextField(scene_name);
+    printTextField("sparse_strip");
+    printTextField(timing_scope);
+    printIntField(measured_frames);
+    printIntField(frame_avg);
+    printIntField(submit_avg);
+    printIntField(average(result.frontend_ns));
+    printIntField(average(result.build_ns));
+    printIntField(average(result.bin_ns));
+    printIntField(average(result.coarse_ns));
+    printIntField(average(result.texture_views_ns));
+    printIntField(average(result.gpu_fine_ns));
+    printIntField(average(result.direct_strip_estimate_ns));
+    printIntField(average(result.gpu_pack_records_ns));
+    printIntField(average(result.gpu_strip_group_ns));
+    printIntField(average(result.gpu_boundary_mark_ns));
+    printIntField(average(result.gpu_fill_task_ns));
+    printIntField(average(result.gpu_crossing_collect_ns));
+    printIntField(average(result.gpu_crossing_sort_ns));
+    printIntField(average(result.gpu_fill_emit_ns));
+    printIntField(average(result.crossing_rows));
+    printIntField(average(result.crossing_items));
+    printIntField(average(result.crossing_sort_rows));
+    printIntField(result.max_crossings_per_row);
+    printIntField(average(result.boundary_checks));
+    printIntField(average(result.boundary_hits));
+    printIntField(average(result.fill_candidates));
+    printIntField(average(result.alpha_segment_refs));
+    printIntField(result.max_alpha_segments_per_task);
+    printIntField(cpu_encode_avg);
+    printIntField(commit_avg);
+    printIntField(average(result.resource_ns));
+    printIntField(average(result.upload_ns));
+    printIntField(average(result.compute_encode_ns));
+    printIntField(average(result.blit_encode_ns));
+    printIntField(gpu_wait_avg);
+    printIntField(@intFromBool(result.gpu_wait_samples > 0));
+    printTextField(result.gpu_wait_kind.label());
+    printTextField(result.gpu_wait_status.label());
+    printIntField(result.calls);
+    printIntField(result.nonempty_calls);
+    printIntField(result.tasks);
+    printIntField(result.fill_tasks);
+    printIntField(result.alpha_fill_tasks);
+    printIntField(result.segment_indices);
+    printIntField(result.fill_span_tiles);
+    printIntField(result.max_fill_span_tiles);
+    printIntField(result.dispatches);
+    printIntField(result.batch_groups);
+    printIntField(result.batch_dispatches);
+    printIntField(result.batch_calls);
+    printIntField(result.batch_tasks);
+    printIntField(result.max_batch_calls);
+    printIntField(result.max_batch_tasks);
+    printIntField(result.batch_break_task_gap);
+    printIntField(result.batch_break_image_mismatch);
+    printIntField(result.batch_break_invalid_bounds);
+    printIntField(result.batch_break_overlap);
+    printIntField(result.upload_bytes);
+    printIntField(result.calls_bytes);
+    printIntField(result.segments_bytes);
+    printIntField(result.tasks_bytes);
+    printIntField(result.segment_indices_bytes);
+    printIntField(@intFromBool(result.direct_supported));
+    printIntField(result.direct_calls);
+    printIntField(result.direct_eligible_calls);
+    printIntField(result.direct_fallback_calls);
+    printIntField(result.direct_fallback_images);
+    printIntField(result.direct_fallback_scissors);
+    printIntField(result.direct_fallback_clips);
+    printIntField(result.direct_fallback_gradients);
+    printIntField(result.direct_fallback_triangles);
+    printIntField(result.direct_strip_instances);
+    printIntField(result.direct_alpha_strip_instances);
+    printIntField(result.direct_solid_span_instances);
+    printIntField(result.direct_solid_span_tiles);
+    printIntField(result.direct_max_solid_span_tiles);
+    printIntField(result.direct_alpha_bytes);
+    printIntField(result.direct_strip_instance_bytes);
+    printIntField(result.direct_paint_bytes);
+    printIntField(result.direct_upload_bytes);
+    printIntField(result.direct_upload_savings_bytes);
+    printTextLast(fallbackName(result.fallback));
+}
+
+fn printTextField(value: []const u8) void {
+    _ = std.c.printf("%.*s\t", @as(c_int, @intCast(value.len)), cString(value));
+}
+
+fn printTextLast(value: []const u8) void {
+    _ = std.c.printf("%.*s\n", @as(c_int, @intCast(value.len)), cString(value));
+}
+
+fn printIntField(value: anytype) void {
+    _ = std.c.printf("%llu\t", u64ForPrint(value));
 }
 
 fn average(total: u128) u64 {

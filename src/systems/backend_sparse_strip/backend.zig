@@ -19,6 +19,7 @@ pub const encode = @import("encode.zig");
 pub const bin = @import("bin.zig");
 pub const coarse = @import("coarse.zig");
 pub const debug = @import("debug.zig");
+pub const direct_strip = @import("direct_strip.zig");
 pub const fine = @import("fine.zig");
 pub const gpu_fine = @import("gpu_fine.zig");
 pub const strip = @import("strip.zig");
@@ -39,9 +40,11 @@ pub const Profile = struct {
     coarse_ns: u64 = 0,
     texture_views_ns: u64 = 0,
     gpu_fine_ns: u64 = 0,
+    direct_strip_estimate_ns: u64 = 0,
     fine_ns: u64 = 0,
     fine_profile: fine.Profile = .{},
     gpu_fine_profile: gpu_fine.Profile = .{},
+    direct_strip_estimate: direct_strip.Stats = .{},
     frame_packet: FramePacketStats = .{},
 
     pub fn reset(self: *Profile) void {
@@ -273,6 +276,9 @@ pub const Backend = struct {
         ) catch return false;
         if (profile) |p| p.gpu_fine_ns += elapsedSince(gpu_fine_start);
         if (profile) |p| {
+            const direct_strip_start = profileStart(profile);
+            p.direct_strip_estimate = direct_strip.estimate(self.calls.items, packet);
+            p.direct_strip_estimate_ns += elapsedSince(direct_strip_start);
             p.frame_packet = self.gpuFineFramePacketStats(packet);
         }
         return supported;
