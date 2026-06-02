@@ -10,6 +10,7 @@ const strip = @import("strip.zig");
 
 pub const gpu_strip_size: usize = 32;
 pub const solid_paint_size: usize = 16;
+pub const alpha_word_size: usize = 4;
 pub const strip_kind_alpha: u16 = 1 << 0;
 pub const strip_kind_solid: u16 = 1 << 1;
 pub const strip_flag_opaque: u16 = 1 << 2;
@@ -17,20 +18,50 @@ pub const strip_flag_opaque: u16 = 1 << 2;
 const invalid_paint_index = std.math.maxInt(u32);
 
 pub const GpuStrip = extern struct {
-    x: u16 = 0,
-    y: u16 = 0,
-    width_px: u16 = 0,
-    flags: u16 = 0,
+    xy: u32 = 0,
+    width_flags: u32 = 0,
     alpha_start: u32 = 0,
     alpha_count: u32 = 0,
     paint_index: u32 = 0,
     call_index: u32 = 0,
     order: u32 = 0,
     _pad0: u32 = 0,
+
+    pub fn init(origin_x: u32, origin_y: u32, width_px: u32, strip_flags: u16, alpha_start: u32, alpha_count: u32, paint_index: u32, call_index: u32, order: u32) GpuStrip {
+        return .{
+            .xy = (@as(u32, @intCast(origin_y)) << 16) | @as(u32, @intCast(origin_x)),
+            .width_flags = (@as(u32, @intCast(strip_flags)) << 16) | @as(u32, @intCast(width_px)),
+            .alpha_start = alpha_start,
+            .alpha_count = alpha_count,
+            .paint_index = paint_index,
+            .call_index = call_index,
+            .order = order,
+        };
+    }
+
+    pub fn x(self: GpuStrip) u16 {
+        return @intCast(self.xy & 0xffff);
+    }
+
+    pub fn y(self: GpuStrip) u16 {
+        return @intCast(self.xy >> 16);
+    }
+
+    pub fn widthPx(self: GpuStrip) u16 {
+        return @intCast(self.width_flags & 0xffff);
+    }
+
+    pub fn flags(self: GpuStrip) u16 {
+        return @intCast(self.width_flags >> 16);
+    }
 };
 
 pub const SolidPaint = extern struct {
     rgba: [4]f32 = .{ 0, 0, 0, 0 },
+};
+
+pub const AlphaWord = extern struct {
+    value: u32 = 0,
 };
 
 pub const Profile = struct {
@@ -94,7 +125,7 @@ pub const Stats = struct {
 pub const Packet = struct {
     strips: std.ArrayList(GpuStrip) = .empty,
     paints: std.ArrayList(SolidPaint) = .empty,
-    alphas: std.ArrayList(u8) = .empty,
+    alphas: std.ArrayList(AlphaWord) = .empty,
     stats: Stats = .{},
 
     pub fn deinit(self: *Packet, gpa: std.mem.Allocator) void {
@@ -123,7 +154,7 @@ pub fn build(
     packet.stats.calls = calls.len;
 
     try packet.strips.ensureTotalCapacity(gpa, gpu_packet.tasks.items.len);
-    try packet.alphas.ensureTotalCapacity(gpa, gpu_packet.stats.alpha_fill_tasks * strip.tile_area);
+    try packet.alphas.ensureTotalCapacity(gpa, alphaWordsForBytes(gpu_packet.stats.alpha_fill_tasks * strip.tile_area));
     try packet.paints.ensureTotalCapacity(gpa, calls.len);
 
     var paint_indices = try gpa.alloc(u32, calls.len);
@@ -151,7 +182,7 @@ pub fn build(
 
         const coord = gpu_fine.taskCoord(task);
         if (gpu_fine.taskIsAlpha(task)) {
-            const alpha_start = packet.alphas.items.len;
+            const alpha_start = packet.alphas.items.len * alpha_word_size;
             const alpha_profile_start = profileStart(profile);
             try appendAlphaTile(gpa, gpu_packet, task, coord, &packet.alphas, &packet.stats);
             if (profile) |p| p.alpha_ns += elapsedSince(alpha_profile_start);
@@ -197,7 +228,7 @@ pub fn build(
     packet.stats.materialized_strip_instances = packet.strips.items.len;
     packet.stats.materialized_alpha_strip_instances = packet.stats.compact_alpha_strip_instances;
     packet.stats.materialized_solid_span_instances = packet.stats.compact_solid_span_instances;
-    packet.stats.materialized_alpha_bytes = packet.alphas.items.len;
+    packet.stats.materialized_alpha_bytes = packet.alphas.items.len * alpha_word_size;
     packet.stats.materialized_strip_instance_bytes = packet.strips.items.len * @sizeOf(GpuStrip);
     packet.stats.materialized_paint_bytes = packet.paints.items.len * @sizeOf(SolidPaint);
     packet.stats.materialized_upload_bytes =
@@ -323,17 +354,17 @@ const MaterializedRun = struct {
             .alpha => strip_kind_alpha,
             .solid => strip_kind_solid,
         };
-        try packet.strips.append(gpa, .{
-            .x = @intCast(self.x),
-            .y = @intCast(self.y),
-            .width_px = @intCast(self.end_x - self.x),
-            .flags = flags,
-            .alpha_start = self.alpha_start,
-            .alpha_count = self.alpha_count,
-            .paint_index = self.paint_index,
-            .call_index = self.call_index,
-            .order = @intCast(packet.strips.items.len),
-        });
+        try packet.strips.append(gpa, GpuStrip.init(
+            self.x,
+            self.y,
+            self.end_x - self.x,
+            flags,
+            self.alpha_start,
+            self.alpha_count,
+            self.paint_index,
+            self.call_index,
+            @intCast(packet.strips.items.len),
+        ));
         switch (self.kind) {
             .alpha => packet.stats.compact_alpha_strip_instances += 1,
             .solid => packet.stats.compact_solid_span_instances += 1,
@@ -348,7 +379,7 @@ fn appendAlphaTile(
     packet: *const gpu_fine.Packet,
     task: gpu_fine.GpuFineTask,
     coord: gpu_fine.TaskCoord,
-    alphas: *std.ArrayList(u8),
+    alphas: *std.ArrayList(AlphaWord),
     stats: *Stats,
 ) !void {
     const fill_rule = fillRuleFromGpu(packet.calls.items[task.call_index].fill_rule);
@@ -376,18 +407,42 @@ fn appendAlphaTile(
         accumulateSegmentAlphaTile(&areas, coord, packet.segments.items[segment_index.value]);
     }
 
+    var alpha_tile: [strip.tile_area]u8 = undefined;
+    for (&areas, &alpha_tile) |area, *alpha| alpha.* = areaToAlpha(fill_rule, area);
+    try appendAlphaTileBytes(gpa, alphas, &alpha_tile);
+}
+
+fn appendZeroAlphaTile(gpa: std.mem.Allocator, alphas: *std.ArrayList(AlphaWord)) !void {
     const alpha_start = alphas.items.len;
-    try alphas.resize(gpa, alpha_start + strip.tile_area);
-    const alpha_tile = alphas.items[alpha_start..][0..strip.tile_area];
-    for (&areas, alpha_tile) |area, *alpha| {
-        alpha.* = areaToAlpha(fill_rule, area);
+    try alphas.resize(gpa, alpha_start + alphaWordsForBytes(strip.tile_area));
+    @memset(alphas.items[alpha_start..][0..alphaWordsForBytes(strip.tile_area)], .{});
+}
+
+fn appendAlphaTileBytes(gpa: std.mem.Allocator, alphas: *std.ArrayList(AlphaWord), bytes: *const [strip.tile_area]u8) !void {
+    const alpha_start = alphas.items.len;
+    try alphas.resize(gpa, alpha_start + alphaWordsForBytes(strip.tile_area));
+    var byte_index: usize = 0;
+    for (alphas.items[alpha_start..][0..alphaWordsForBytes(strip.tile_area)]) |*word| {
+        word.value = packAlphaWord(bytes[byte_index..][0..alpha_word_size]);
+        byte_index += alpha_word_size;
     }
 }
 
-fn appendZeroAlphaTile(gpa: std.mem.Allocator, alphas: *std.ArrayList(u8)) !void {
-    const alpha_start = alphas.items.len;
-    try alphas.resize(gpa, alpha_start + strip.tile_area);
-    @memset(alphas.items[alpha_start..][0..strip.tile_area], 0);
+pub fn packAlphaWord(bytes: *const [alpha_word_size]u8) u32 {
+    return @as(u32, bytes[0]) |
+        (@as(u32, bytes[1]) << 8) |
+        (@as(u32, bytes[2]) << 16) |
+        (@as(u32, bytes[3]) << 24);
+}
+
+pub fn alphaByte(words: []const AlphaWord, byte_index: usize) u8 {
+    const word = words[byte_index / alpha_word_size].value;
+    const shift: u5 = @intCast((byte_index % alpha_word_size) * 8);
+    return @intCast((word >> shift) & 0xff);
+}
+
+pub fn alphaWordsForBytes(byte_count: usize) usize {
+    return (byte_count + alpha_word_size - 1) / alpha_word_size;
 }
 
 fn accumulateSegmentAlphaTile(areas: *[strip.tile_area]f32, coord: gpu_fine.TaskCoord, seg: gpu_fine.GpuSegment) void {
@@ -727,9 +782,9 @@ test "direct strip materialized packet writes alpha bytes" {
     try std.testing.expect(try build(std.testing.allocator, &calls, &gpu_packet, &packet, &profile));
 
     try std.testing.expectEqual(@as(usize, 1), packet.strips.items.len);
-    try std.testing.expectEqual(@as(usize, strip.tile_area), packet.alphas.items.len);
-    try std.testing.expectEqual(@as(u8, 128), packet.alphas.items[0]);
-    try std.testing.expectEqual(@as(u16, strip_kind_alpha), packet.strips.items[0].flags);
+    try std.testing.expectEqual(@as(usize, alphaWordsForBytes(strip.tile_area)), packet.alphas.items.len);
+    try std.testing.expectEqual(@as(u8, 128), alphaByte(packet.alphas.items, 0));
+    try std.testing.expectEqual(@as(u16, strip_kind_alpha), packet.strips.items[0].flags());
     try std.testing.expectEqual(@as(u32, strip.tile_area), packet.strips.items[0].alpha_count);
     try std.testing.expectEqual(@as(usize, strip.tile_area + gpu_strip_size + solid_paint_size), packet.stats.materialized_upload_bytes);
     try std.testing.expectEqual(@as(usize, 1), packet.stats.materialized_single_segment_alpha_tasks);
@@ -767,7 +822,7 @@ test "direct strip materialized packet coalesces adjacent alpha tasks" {
     try std.testing.expect(try build(std.testing.allocator, &calls, &gpu_packet, &packet, null));
 
     try std.testing.expectEqual(@as(usize, 1), packet.strips.items.len);
-    try std.testing.expectEqual(@as(u16, strip.tile_size * 2), packet.strips.items[0].width_px);
+    try std.testing.expectEqual(@as(u16, strip.tile_size * 2), packet.strips.items[0].widthPx());
     try std.testing.expectEqual(@as(u32, strip.tile_area * 2), packet.strips.items[0].alpha_count);
     try std.testing.expectEqual(@as(usize, strip.tile_area * 2), packet.stats.materialized_alpha_bytes);
     try std.testing.expectEqual(@as(usize, 2), packet.stats.materialized_single_segment_alpha_tasks);
@@ -788,8 +843,8 @@ test "direct strip materialized packet counts invalid alpha segment refs" {
     defer packet.deinit(std.testing.allocator);
     try std.testing.expect(try build(std.testing.allocator, &calls, &gpu_packet, &packet, null));
 
-    try std.testing.expectEqual(@as(usize, strip.tile_area), packet.alphas.items.len);
-    try std.testing.expectEqual(@as(u8, 0), packet.alphas.items[0]);
+    try std.testing.expectEqual(@as(usize, alphaWordsForBytes(strip.tile_area)), packet.alphas.items.len);
+    try std.testing.expectEqual(@as(u8, 0), alphaByte(packet.alphas.items, 0));
     try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_single_segment_alpha_tasks);
     try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_multi_segment_alpha_tasks);
     try std.testing.expectEqual(@as(usize, 1), packet.stats.materialized_invalid_segment_refs);
@@ -841,8 +896,8 @@ test "direct strip materialized packet coalesces adjacent fill spans" {
     try std.testing.expect(try build(std.testing.allocator, &calls, &gpu_packet, &packet, null));
 
     try std.testing.expectEqual(@as(usize, 1), packet.strips.items.len);
-    try std.testing.expectEqual(@as(u16, strip.tile_size * 4), packet.strips.items[0].width_px);
-    try std.testing.expectEqual(@as(u16, strip_kind_solid), packet.strips.items[0].flags);
+    try std.testing.expectEqual(@as(u16, strip.tile_size * 4), packet.strips.items[0].widthPx());
+    try std.testing.expectEqual(@as(u16, strip_kind_solid), packet.strips.items[0].flags());
     try std.testing.expectEqual(@as(usize, 1), packet.stats.materialized_solid_span_instances);
 }
 
@@ -866,8 +921,8 @@ test "direct strip materialized packet flushes before ineligible task" {
     try std.testing.expect(!try build(std.testing.allocator, &calls, &gpu_packet, &packet, null));
 
     try std.testing.expectEqual(@as(usize, 2), packet.strips.items.len);
-    try std.testing.expectEqual(@as(u16, strip.tile_size), packet.strips.items[0].width_px);
-    try std.testing.expectEqual(@as(u16, strip.tile_size), packet.strips.items[1].width_px);
+    try std.testing.expectEqual(@as(u16, strip.tile_size), packet.strips.items[0].widthPx());
+    try std.testing.expectEqual(@as(u16, strip.tile_size), packet.strips.items[1].widthPx());
     try std.testing.expectEqual(@as(usize, 1), packet.stats.fallback_calls);
 }
 
@@ -881,8 +936,10 @@ fn eligibleTestCall() encode.EncodedCall {
 
 comptime {
     std.debug.assert(@sizeOf(GpuStrip) == gpu_strip_size);
-    std.debug.assert(@offsetOf(GpuStrip, "x") == 0);
+    std.debug.assert(@offsetOf(GpuStrip, "xy") == 0);
+    std.debug.assert(@offsetOf(GpuStrip, "width_flags") == 4);
     std.debug.assert(@offsetOf(GpuStrip, "alpha_start") == 8);
     std.debug.assert(@offsetOf(GpuStrip, "paint_index") == 16);
     std.debug.assert(@sizeOf(SolidPaint) == solid_paint_size);
+    std.debug.assert(@sizeOf(AlphaWord) == alpha_word_size);
 }

@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) !void {
         b.option(bool, "wgpu", "Deprecated alias for -Dbackend=wgpu"),
     );
     const with_wgpu = backend == .wgpu;
+    const direct_strip_bench = b.option(bool, "direct-strip", "Use the experimental direct-strip render path in full-frame GPU benches") orelse false;
     const webgpu_include = b.option([]const u8, "webgpu-include", "Override the WebGPU C header include directory");
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
@@ -91,6 +92,19 @@ pub fn build(b: *std.Build) !void {
         },
         .reflection = true,
     });
+    const mod_okys_direct_strip_shader = try sokol.shdc.createModule(b, "okys_direct_strip_shader", mod_sokol, .{
+        .shdc_dep = dep_sokol.builder.dependency("shdc", .{}),
+        .input = "src/shaders/direct_strip.glsl",
+        .output = "okys_direct_strip_shader.zig",
+        .slang = .{
+            .glsl430 = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+            .spirv_vk = true,
+        },
+        .reflection = true,
+    });
 
     const okys_mod = b.createModule(.{
         .root_source_file = b.path("src/okys.zig"),
@@ -103,6 +117,7 @@ pub fn build(b: *std.Build) !void {
     okys_mod.addImport("okys_path_shader", mod_okys_path_shader);
     okys_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
     okys_mod.addImport("okys_sparse_fine_shader", mod_okys_sparse_fine_shader);
+    okys_mod.addImport("okys_direct_strip_shader", mod_okys_direct_strip_shader);
     okys_mod.addImport("tatfi", mod_tatfi);
 
     const tiger_data_mod = b.createModule(.{
@@ -253,6 +268,7 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_full_frame_bench_mod.addImport("bench_scenes", bench_scenes_mod);
     const tiger_gpu_full_frame_options = b.addOptions();
     tiger_gpu_full_frame_options.addOption(u8, "timing_mode", 0);
+    tiger_gpu_full_frame_options.addOption(bool, "direct_strip", direct_strip_bench);
     tiger_gpu_full_frame_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_full_frame_options);
     const gpu_fence_wait_mod = b.createModule(.{
         .root_source_file = b.path("tools/gpu_fence_wait.zig"),
@@ -306,6 +322,7 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_texture_bench_mod.addImport("gpu_fence_wait", gpu_fence_wait_mod);
     const tiger_gpu_texture_options = b.addOptions();
     tiger_gpu_texture_options.addOption(u8, "timing_mode", 1);
+    tiger_gpu_texture_options.addOption(bool, "direct_strip", direct_strip_bench);
     tiger_gpu_texture_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_texture_options);
     if (with_wgpu) {
         if (webgpu_include) |include_path| {
@@ -349,6 +366,7 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_empty_bench_mod.addImport("gpu_fence_wait", gpu_fence_wait_mod);
     const tiger_gpu_empty_options = b.addOptions();
     tiger_gpu_empty_options.addOption(u8, "timing_mode", 2);
+    tiger_gpu_empty_options.addOption(bool, "direct_strip", direct_strip_bench);
     tiger_gpu_empty_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_empty_options);
     if (with_wgpu) {
         if (webgpu_include) |include_path| {
@@ -392,6 +410,7 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_upload_bench_mod.addImport("gpu_fence_wait", gpu_fence_wait_mod);
     const tiger_gpu_upload_options = b.addOptions();
     tiger_gpu_upload_options.addOption(u8, "timing_mode", 3);
+    tiger_gpu_upload_options.addOption(bool, "direct_strip", direct_strip_bench);
     tiger_gpu_upload_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_upload_options);
     if (with_wgpu) {
         if (webgpu_include) |include_path| {
@@ -435,6 +454,7 @@ pub fn build(b: *std.Build) !void {
     tiger_gpu_clear_bench_mod.addImport("gpu_fence_wait", gpu_fence_wait_mod);
     const tiger_gpu_clear_options = b.addOptions();
     tiger_gpu_clear_options.addOption(u8, "timing_mode", 4);
+    tiger_gpu_clear_options.addOption(bool, "direct_strip", direct_strip_bench);
     tiger_gpu_clear_bench_mod.addOptions("gpu_full_frame_options", tiger_gpu_clear_options);
     if (with_wgpu) {
         if (webgpu_include) |include_path| {
@@ -520,6 +540,7 @@ pub fn build(b: *std.Build) !void {
     lib_mod.addImport("okys_path_shader", mod_okys_path_shader);
     lib_mod.addImport("okys_blit_shader", mod_okys_blit_shader);
     lib_mod.addImport("okys_sparse_fine_shader", mod_okys_sparse_fine_shader);
+    lib_mod.addImport("okys_direct_strip_shader", mod_okys_direct_strip_shader);
     lib_mod.addImport("tatfi", mod_tatfi);
 
     const lib = b.addLibrary(.{

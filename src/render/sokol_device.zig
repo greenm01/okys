@@ -5,6 +5,8 @@ const sokol = @import("sokol");
 const sg = sokol.gfx;
 const std = @import("std");
 const blit_shader = @import("okys_blit_shader");
+const direct_strip = @import("../systems/backend_sparse_strip/direct_strip.zig");
+const direct_strip_shader = @import("okys_direct_strip_shader");
 const gpu_fine = @import("../systems/backend_sparse_strip/gpu_fine.zig");
 const sparse_encode = @import("../systems/backend_sparse_strip/encode.zig");
 const image = @import("../types/image.zig");
@@ -38,6 +40,12 @@ pub const blit_sampler_slot = blit_shader.SMP_sparse_smp;
 pub const BlitVsParams = blit_shader.VsParams;
 pub const SparseClearParams = sparse_fine_shader.ClearParams;
 pub const SparseFineParams = sparse_fine_shader.FineParams;
+pub const DirectStripVsParams = direct_strip_shader.VsParams;
+pub const direct_strip_corner_attr = direct_strip_shader.ATTR_direct_strip_corner;
+pub const direct_strip_vs_params_slot = direct_strip_shader.UB_vs_params;
+pub const direct_strip_strips_view_slot = direct_strip_shader.VIEW_strips_buf;
+pub const direct_strip_paints_view_slot = direct_strip_shader.VIEW_paints_buf;
+pub const direct_strip_alpha_words_view_slot = direct_strip_shader.VIEW_alpha_words_buf;
 pub const sparse_clear_surface_view_slot = sparse_fine_shader.VIEW_clear_surface_img;
 pub const sparse_calls_view_slot = sparse_fine_shader.VIEW_calls_buf;
 pub const sparse_segments_view_slot = sparse_fine_shader.VIEW_segments_buf;
@@ -162,6 +170,20 @@ pub const SparseFineSubmitTiming = struct {
     batch_break_overlap: usize = 0,
 };
 
+pub const DirectStripSubmitTiming = struct {
+    ok: bool = false,
+    fallback: SparseFineFallback = .none,
+    total_ns: u64 = 0,
+    resource_ns: u64 = 0,
+    upload_ns: u64 = 0,
+    draw_encode_ns: u64 = 0,
+    strips: usize = 0,
+    paints: usize = 0,
+    alpha_words: usize = 0,
+    upload_bytes: usize = 0,
+    draw_calls: usize = 0,
+};
+
 pub const SparseFineBatchStats = struct {
     groups: usize = 0,
     dispatches: usize = 0,
@@ -211,6 +233,15 @@ pub fn sparseFineSubmitTimingForPacket(packet: *const gpu_fine.Packet, dispatche
         .batch_break_image_mismatch = batch_stats.break_image_mismatch,
         .batch_break_invalid_bounds = batch_stats.break_invalid_bounds,
         .batch_break_overlap = batch_stats.break_overlap,
+    };
+}
+
+pub fn directStripSubmitTimingForPacket(packet: *const direct_strip.Packet) DirectStripSubmitTiming {
+    return .{
+        .strips = packet.strips.items.len,
+        .paints = packet.paints.items.len,
+        .alpha_words = packet.alphas.items.len,
+        .upload_bytes = packet.stats.materialized_upload_bytes,
     };
 }
 
@@ -328,6 +359,11 @@ pub const BlitVertex = extern struct {
     v: f32,
 };
 
+pub const DirectStripCorner = extern struct {
+    x: f32,
+    y: f32,
+};
+
 pub const Device = struct {
     owns_setup: bool = false,
     width: i32 = 0,
@@ -377,6 +413,12 @@ pub const Device = struct {
     sparse_clip_index_buffer: StorageBufferResource = .{},
     sparse_task_buffer: StorageBufferResource = .{},
     sparse_segment_index_buffer: StorageBufferResource = .{},
+    direct_strip_shader: Shader = .{},
+    direct_strip_pipeline: Pipeline = .{},
+    direct_strip_corners: Buffer = .{},
+    direct_strip_buffer: StorageBufferResource = .{},
+    direct_paint_buffer: StorageBufferResource = .{},
+    direct_alpha_buffer: StorageBufferResource = .{},
 
     pub fn initOwned(desc: Desc) Device {
         sg.setup(desc);
@@ -390,6 +432,7 @@ pub const Device = struct {
     pub fn deinit(self: *Device) void {
         self.destroyBlitResources();
         self.destroySmokeResources();
+        self.destroyDirectStripResources();
         self.destroySparseFineResources();
         self.destroyPathTextureResources();
         self.destroyPathResources();
@@ -429,6 +472,24 @@ pub const Device = struct {
             self.smoke_vertices = .{};
         }
         self.smoke_bindings = .{};
+    }
+
+    pub fn destroyDirectStripResources(self: *Device) void {
+        destroyStorageBuffer(&self.direct_alpha_buffer);
+        destroyStorageBuffer(&self.direct_paint_buffer);
+        destroyStorageBuffer(&self.direct_strip_buffer);
+        if (self.direct_strip_corners.id != 0) {
+            sg.destroyBuffer(self.direct_strip_corners);
+            self.direct_strip_corners = .{};
+        }
+        if (self.direct_strip_pipeline.id != 0) {
+            sg.destroyPipeline(self.direct_strip_pipeline);
+            self.direct_strip_pipeline = .{};
+        }
+        if (self.direct_strip_shader.id != 0) {
+            sg.destroyShader(self.direct_strip_shader);
+            self.direct_strip_shader = .{};
+        }
     }
 
     pub fn createBlitResources(self: *Device, surface_width: u32, surface_height: u32) void {
@@ -471,6 +532,65 @@ pub const Device = struct {
         }
         self.blit_width = 0;
         self.blit_height = 0;
+    }
+
+    pub fn drawDirectStripSurfaceTimed(
+        self: *Device,
+        pass: Pass,
+        packet: *const direct_strip.Packet,
+        view_width: f32,
+        view_height: f32,
+        timing: *DirectStripSubmitTiming,
+    ) bool {
+        const total_start = nowNs();
+        timing.* = directStripSubmitTimingForPacket(packet);
+        defer timing.total_ns = elapsedSince(total_start);
+
+        if (packet.strips.items.len == 0) {
+            timing.fallback = .empty_packet;
+            return false;
+        }
+        if (!packet.stats.supported) {
+            timing.fallback = .unsupported_packet;
+            return false;
+        }
+
+        const resource_start = nowNs();
+        self.ensureDirectStripResources(packet);
+        timing.resource_ns = elapsedSince(resource_start);
+        if (self.direct_strip_pipeline.id == 0 or
+            self.direct_strip_corners.id == 0 or
+            self.direct_strip_buffer.view.id == 0 or
+            self.direct_paint_buffer.view.id == 0 or
+            self.direct_alpha_buffer.view.id == 0)
+        {
+            timing.fallback = .missing_resources;
+            return false;
+        }
+
+        const upload_start = nowNs();
+        uploadStorageBuffer(direct_strip.GpuStrip, self.direct_strip_buffer.buffer, packet.strips.items);
+        uploadStorageBuffer(direct_strip.SolidPaint, self.direct_paint_buffer.buffer, packet.paints.items);
+        uploadStorageBuffer(direct_strip.AlphaWord, self.direct_alpha_buffer.buffer, packet.alphas.items);
+        timing.upload_ns = elapsedSince(upload_start);
+
+        const draw_start = nowNs();
+        self.beginPass(pass);
+        const params = directStripVsParams(view_width, view_height);
+        sg.applyPipeline(self.direct_strip_pipeline);
+        sg.applyBindings(directStripBindings(
+            self.direct_strip_corners,
+            self.direct_strip_buffer.view,
+            self.direct_paint_buffer.view,
+            self.direct_alpha_buffer.view,
+        ));
+        sg.applyUniforms(direct_strip_vs_params_slot, rangeFromValue(DirectStripVsParams, &params));
+        sg.draw(0, 4, @intCast(packet.strips.items.len));
+        sg.endPass();
+        timing.draw_encode_ns = elapsedSince(draw_start);
+        timing.draw_calls = 1;
+        timing.ok = true;
+        return true;
     }
 
     pub fn drawRgbaSurface(
@@ -1257,6 +1377,22 @@ pub const Device = struct {
         self.ensureSparseSurface(surface_width, surface_height);
     }
 
+    fn ensureDirectStripResources(self: *Device, packet: *const direct_strip.Packet) void {
+        if (self.direct_strip_shader.id == 0) {
+            self.direct_strip_shader = sg.makeShader(direct_strip_shader.directStripShaderDesc(sg.queryBackend()));
+        }
+        if (self.direct_strip_pipeline.id == 0 and self.direct_strip_shader.id != 0) {
+            self.direct_strip_pipeline = sg.makePipeline(directStripPipelineDesc(self.direct_strip_shader));
+        }
+        if (self.direct_strip_corners.id == 0) {
+            self.direct_strip_corners = sg.makeBuffer(directStripCornerBufferDesc());
+        }
+
+        self.ensureStorageBuffer(&self.direct_strip_buffer, bytesFor(direct_strip.GpuStrip, packet.strips.items.len), "okys_direct_strips");
+        self.ensureStorageBuffer(&self.direct_paint_buffer, bytesFor(direct_strip.SolidPaint, packet.paints.items.len), "okys_direct_paints");
+        self.ensureStorageBuffer(&self.direct_alpha_buffer, bytesFor(direct_strip.AlphaWord, packet.alphas.items.len), "okys_direct_alpha_words");
+    }
+
     fn ensureStorageBuffer(self: *Device, resource: *StorageBufferResource, byte_count: usize, label: [*c]const u8) void {
         _ = self;
         const capacity = @max(byte_count, 4);
@@ -1651,6 +1787,20 @@ pub fn blitVertexBufferDesc() BufferDesc {
     };
 }
 
+pub fn directStripCornerBufferDesc() BufferDesc {
+    const corners = [_]DirectStripCorner{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 1, .y = 0 },
+        .{ .x = 0, .y = 1 },
+        .{ .x = 1, .y = 1 },
+    };
+    return .{
+        .usage = .{ .vertex_buffer = true, .immutable = true },
+        .data = rangeFromSlice(DirectStripCorner, corners[0..]),
+        .label = "okys_direct_strip_corners",
+    };
+}
+
 pub fn blitImageDesc(width: u32, height: u32) sg.ImageDesc {
     return .{
         .type = ._2D,
@@ -1852,12 +2002,33 @@ pub fn blitPipelineDesc(shader: Shader) PipelineDesc {
     return desc;
 }
 
+pub fn directStripPipelineDesc(shader: Shader) PipelineDesc {
+    var desc: PipelineDesc = .{};
+    desc.shader = shader;
+    desc.layout.buffers[0].stride = @sizeOf(DirectStripCorner);
+    desc.layout.attrs[direct_strip_corner_attr].offset = @offsetOf(DirectStripCorner, "x");
+    desc.layout.attrs[direct_strip_corner_attr].format = .FLOAT2;
+    desc.primitive_type = .TRIANGLE_STRIP;
+    desc.colors[0].blend = premultipliedAlphaBlend();
+    desc.label = "okys_direct_strip_pipeline";
+    return desc;
+}
+
 pub fn blitBindings(vertex_buffer: Buffer, vertex_offset_bytes: i32, view: View, sampler: Sampler) Bindings {
     var bindings: Bindings = .{};
     bindings.vertex_buffers[0] = vertex_buffer;
     bindings.vertex_buffer_offsets[0] = vertex_offset_bytes;
     bindings.views[blit_view_slot] = view;
     bindings.samplers[blit_sampler_slot] = sampler;
+    return bindings;
+}
+
+pub fn directStripBindings(corner_buffer: Buffer, strips_view: View, paints_view: View, alpha_words_view: View) Bindings {
+    var bindings: Bindings = .{};
+    bindings.vertex_buffers[0] = corner_buffer;
+    bindings.views[direct_strip_strips_view_slot] = strips_view;
+    bindings.views[direct_strip_paints_view_slot] = paints_view;
+    bindings.views[direct_strip_alpha_words_view_slot] = alpha_words_view;
     return bindings;
 }
 
@@ -1945,6 +2116,15 @@ pub fn blitVsParams(view_width: f32, view_height: f32) BlitVsParams {
 }
 
 pub fn pathVsParams(view_width: f32, view_height: f32) PathVsParams {
+    return .{
+        .view_size = .{
+            if (view_width > 0) view_width else 1,
+            if (view_height > 0) view_height else 1,
+        },
+    };
+}
+
+pub fn directStripVsParams(view_width: f32, view_height: f32) DirectStripVsParams {
     return .{
         .view_size = .{
             if (view_width > 0) view_width else 1,
@@ -2053,6 +2233,18 @@ fn alphaBlend() sg.BlendState {
     return .{
         .enabled = true,
         .src_factor_rgb = .SRC_ALPHA,
+        .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+        .op_rgb = .ADD,
+        .src_factor_alpha = .ONE,
+        .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+        .op_alpha = .ADD,
+    };
+}
+
+fn premultipliedAlphaBlend() sg.BlendState {
+    return .{
+        .enabled = true,
+        .src_factor_rgb = .ONE,
         .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
         .op_rgb = .ADD,
         .src_factor_alpha = .ONE,

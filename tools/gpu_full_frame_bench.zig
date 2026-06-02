@@ -281,6 +281,7 @@ var direct_packet: DirectStripPacket = .{};
 var frame_index: usize = 0;
 var accum: Accumulator = .{};
 const timing_mode: TimingMode = @enumFromInt(gpu_full_frame_options.timing_mode);
+const direct_strip_enabled = gpu_full_frame_options.direct_strip;
 
 pub fn main() void {
     printHeader();
@@ -353,6 +354,20 @@ fn frame() callconv(.c) void {
             return;
         }
         build_ns = nowNs() - build_start;
+
+        if (direct_strip_enabled and timing_mode == .full_frame) {
+            const direct_strip_materialize_start = nowNs();
+            const direct_supported = DirectStrip.build(gpa, sparse_backend.calls.items, &packet, &direct_packet, null) catch |err| {
+                fail("direct strip packet build failed: {s}", .{@errorName(err)});
+                return;
+            };
+            if (!direct_supported) {
+                fail("direct strip packet unsupported", .{});
+                return;
+            }
+            direct_strip_materialize_ns = nowNs() - direct_strip_materialize_start;
+            direct_strip_stats = direct_packet.stats;
+        }
     }
 
     var timing: sokol_device.SparseFineSubmitTiming = .{};
@@ -383,14 +398,26 @@ fn frame() callconv(.c) void {
             &timing,
         ),
         .full_frame => blk: {
-            const sparse_backend = backend orelse {
-                fail("missing sparse backend", .{});
-                return;
-            };
             const pass = sokol_device.swapchainPassWithAction(
                 sokol_device.clearPassAction(.{ .r = 0.08, .g = 0.09, .b = 0.10, .a = 1.0 }),
                 glue.swapchain(),
             );
+            if (direct_strip_enabled) {
+                var direct_timing: sokol_device.DirectStripSubmitTiming = .{};
+                const ok = device.drawDirectStripSurfaceTimed(
+                    pass,
+                    &direct_packet,
+                    bench_scenes.scene_width,
+                    bench_scenes.scene_height,
+                    &direct_timing,
+                );
+                timing = sparseTimingFromDirect(direct_timing);
+                break :blk ok;
+            }
+            const sparse_backend = backend orelse {
+                fail("missing sparse backend", .{});
+                return;
+            };
             break :blk device.drawSparseFineSurfaceTimed(
                 pass,
                 &packet,
@@ -432,7 +459,7 @@ fn frame() callconv(.c) void {
                 fail("missing sparse backend", .{});
                 return;
             };
-            if (frame_index == warmup_frames) {
+            if (!direct_strip_enabled and frame_index == warmup_frames) {
                 const direct_strip_materialize_start = nowNs();
                 _ = DirectStrip.build(gpa, sparse_backend.calls.items, &packet, &direct_packet, null) catch |err| {
                     fail("direct strip packet build failed: {s}", .{@errorName(err)});
@@ -492,8 +519,9 @@ fn printResult(result: Accumulator) void {
     const gpu_wait_avg = if (result.gpu_wait_samples > 0) @as(u64, @intCast(result.gpu_wait_ns / result.gpu_wait_samples)) else 0;
     const scene_name = "ghostscript_tiger";
     const timing_scope = timing_mode.label();
+    const backend_name = if (direct_strip_enabled and timing_mode == .full_frame) "direct_strip" else "sparse_strip";
     printTextField(scene_name);
-    printTextField("sparse_strip");
+    printTextField(backend_name);
     printTextField(timing_scope);
     printIntField(measured_frames);
     printIntField(frame_avg);
@@ -626,6 +654,24 @@ fn fallbackName(fallback: sokol_device.SparseFineFallback) []const u8 {
         .empty_packet => "empty_packet",
         .missing_texture => "missing_texture",
         .missing_resources => "missing_resources",
+    };
+}
+
+fn sparseTimingFromDirect(timing: sokol_device.DirectStripSubmitTiming) sokol_device.SparseFineSubmitTiming {
+    return .{
+        .ok = timing.ok,
+        .fallback = timing.fallback,
+        .total_ns = timing.total_ns,
+        .resource_ns = timing.resource_ns,
+        .upload_ns = timing.upload_ns,
+        .compute_encode_ns = timing.draw_encode_ns,
+        .calls = timing.paints,
+        .tasks = timing.strips,
+        .dispatches = timing.draw_calls,
+        .upload_bytes = timing.upload_bytes,
+        .nonempty_calls = timing.paints,
+        .fill_tasks = timing.strips,
+        .alpha_fill_tasks = timing.alpha_words,
     };
 }
 
