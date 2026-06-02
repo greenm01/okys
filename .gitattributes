@@ -1,0 +1,8 @@
+# Keep GitHub language stats focused on the public implementation languages.
+* linguist-detectable=false
+
+*.zig linguist-detectable=true linguist-language=Zig
+*.zon linguist-detectable=true linguist-language=Zig
+
+*.c linguist-detectable=true linguist-language=C
+include/**/*.h linguist-detectable=true linguist-language=C
