@@ -351,52 +351,47 @@ fn appendAlphaTile(
     const start: usize = @intCast(task.segment_start);
     const count: usize = @intCast(gpu_fine.taskSegmentCount(task));
     const indices = packet.segment_indices.items[start..][0..count];
+    var areas = [_]f32{0} ** strip.tile_area;
+    for (indices) |segment_index| {
+        if (segment_index.value >= packet.segments.items.len) continue;
+        accumulateSegmentAlphaTile(&areas, coord, packet.segments.items[segment_index.value]);
+    }
 
-    try alphas.ensureUnusedCapacity(gpa, strip.tile_area);
+    const alpha_start = alphas.items.len;
+    try alphas.resize(gpa, alpha_start + strip.tile_area);
+    const alpha_tile = alphas.items[alpha_start..][0..strip.tile_area];
+    for (&areas, alpha_tile) |area, *alpha| {
+        alpha.* = areaToAlpha(fill_rule, area);
+    }
+}
+
+fn accumulateSegmentAlphaTile(areas: *[strip.tile_area]f32, coord: gpu_fine.TaskCoord, seg: gpu_fine.GpuSegment) void {
+    if (seg.sign == 0) return;
+    const tile_x: f32 = @floatFromInt(coord.x);
     var local_y: u16 = 0;
     while (local_y < strip.tile_size) : (local_y += 1) {
+        const py = @as(f32, @floatFromInt(coord.y + local_y));
+        const y0 = @max(seg.min_y, py);
+        const y1 = @min(seg.max_y, py + 1);
+        if (y0 >= y1) continue;
+
+        var intercept = seg.intercept - tile_x;
         var local_x: u16 = 0;
+        var alpha_index = @as(usize, local_y) * strip.tile_size;
         while (local_x < strip.tile_size) : (local_x += 1) {
-            alphas.appendAssumeCapacity(pixelCoverage(
-                fill_rule,
-                @intCast(coord.x + local_x),
-                @intCast(coord.y + local_y),
-                packet.segments.items,
-                indices,
-            ));
+            areas[alpha_index] += segmentAreaAt(seg.sign, seg.slope, intercept, y0, y1);
+            intercept -= 1;
+            alpha_index += 1;
         }
     }
 }
 
-fn pixelCoverage(
-    fill_rule: strip.FillRule,
-    x: u16,
-    y: u16,
-    segments: []const gpu_fine.GpuSegment,
-    indices: []const gpu_fine.GpuSegmentIndex,
-) u8 {
-    var area: f32 = 0;
-    const px: f32 = @floatFromInt(x);
-    const py: f32 = @floatFromInt(y);
-    for (indices) |segment_index| {
-        if (segment_index.value >= segments.len) continue;
-        area += segmentArea(px, py, segments[segment_index.value]);
-    }
-    return areaToAlpha(fill_rule, area);
-}
-
-fn segmentArea(px: f32, py: f32, seg: gpu_fine.GpuSegment) f32 {
-    if (seg.sign == 0) return 0;
-    const y0 = @max(seg.min_y, py);
-    const y1 = @min(seg.max_y, py + 1);
-    if (y0 >= y1) return 0;
-
-    const intercept = seg.intercept - px;
-    const x0 = seg.slope * y0 + intercept;
-    const x1 = seg.slope * y1 + intercept;
+fn segmentAreaAt(sign: f32, slope: f32, intercept: f32, y0: f32, y1: f32) f32 {
+    const x0 = slope * y0 + intercept;
+    const x1 = slope * y1 + intercept;
     if (x0 <= 0 and x1 <= 0) return 0;
-    if (x0 >= 1 and x1 >= 1) return seg.sign * (y1 - y0);
-    return seg.sign * integrateClampedLinear(seg.slope, intercept, y0, y1);
+    if (x0 >= 1 and x1 >= 1) return sign * (y1 - y0);
+    return sign * integrateClampedLinear(slope, intercept, y0, y1);
 }
 
 fn integrateClampedLinear(slope: f32, intercept: f32, y0: f32, y1: f32) f32 {
@@ -404,9 +399,8 @@ fn integrateClampedLinear(slope: f32, intercept: f32, y0: f32, y1: f32) f32 {
 
     var stops = [_]f32{ y0, y1, 0, 0 };
     var count: usize = 2;
-    addStop(&stops, &count, (0 - intercept) / slope, y0, y1);
-    addStop(&stops, &count, (1 - intercept) / slope, y0, y1);
-    std.mem.sort(f32, stops[0..count], {}, lessThanF32);
+    addSortedStop(&stops, &count, (0 - intercept) / slope, y0, y1);
+    addSortedStop(&stops, &count, (1 - intercept) / slope, y0, y1);
 
     var area: f32 = 0;
     var i: usize = 0;
@@ -431,14 +425,14 @@ fn integrateClampedLinear(slope: f32, intercept: f32, y0: f32, y1: f32) f32 {
     return std.math.clamp(area, 0, y1 - y0);
 }
 
-fn addStop(stops: *[4]f32, count: *usize, value: f32, min: f32, max: f32) void {
+fn addSortedStop(stops: *[4]f32, count: *usize, value: f32, min: f32, max: f32) void {
     if (value <= min or value >= max) return;
-    stops[count.*] = value;
+    var index = count.*;
+    while (index > 0 and value < stops[index - 1]) : (index -= 1) {
+        stops[index] = stops[index - 1];
+    }
+    stops[index] = value;
     count.* += 1;
-}
-
-fn lessThanF32(_: void, a: f32, b: f32) bool {
-    return a < b;
 }
 
 fn areaToAlpha(fill_rule: strip.FillRule, area: f32) u8 {
