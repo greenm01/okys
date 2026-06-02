@@ -71,6 +71,9 @@ pub const Stats = struct {
     materialized_strip_instance_bytes: usize = 0,
     materialized_paint_bytes: usize = 0,
     materialized_upload_bytes: usize = 0,
+    materialized_single_segment_alpha_tasks: usize = 0,
+    materialized_multi_segment_alpha_tasks: usize = 0,
+    materialized_invalid_segment_refs: usize = 0,
 
     pub fn uploadSavingsVs(self: Stats, current_upload_bytes: usize) usize {
         if (current_upload_bytes <= self.upload_bytes) return 0;
@@ -150,7 +153,7 @@ pub fn build(
         if (gpu_fine.taskIsAlpha(task)) {
             const alpha_start = packet.alphas.items.len;
             const alpha_profile_start = profileStart(profile);
-            try appendAlphaTile(gpa, gpu_packet, task, coord, &packet.alphas);
+            try appendAlphaTile(gpa, gpu_packet, task, coord, &packet.alphas, &packet.stats);
             if (profile) |p| p.alpha_ns += elapsedSince(alpha_profile_start);
             packet.stats.alpha_strip_instances += 1;
             packet.stats.alpha_bytes += strip.tile_area;
@@ -346,14 +349,30 @@ fn appendAlphaTile(
     task: gpu_fine.GpuFineTask,
     coord: gpu_fine.TaskCoord,
     alphas: *std.ArrayList(u8),
+    stats: *Stats,
 ) !void {
     const fill_rule = fillRuleFromGpu(packet.calls.items[task.call_index].fill_rule);
     const start: usize = @intCast(task.segment_start);
     const count: usize = @intCast(gpu_fine.taskSegmentCount(task));
     const indices = packet.segment_indices.items[start..][0..count];
+    if (count == 1) {
+        const segment_index = indices[0].value;
+        if (segment_index < packet.segments.items.len) {
+            stats.materialized_single_segment_alpha_tasks += 1;
+        } else {
+            stats.materialized_invalid_segment_refs += 1;
+            return appendZeroAlphaTile(gpa, alphas);
+        }
+    } else {
+        stats.materialized_multi_segment_alpha_tasks += 1;
+    }
+
     var areas = [_]f32{0} ** strip.tile_area;
     for (indices) |segment_index| {
-        if (segment_index.value >= packet.segments.items.len) continue;
+        if (segment_index.value >= packet.segments.items.len) {
+            stats.materialized_invalid_segment_refs += 1;
+            continue;
+        }
         accumulateSegmentAlphaTile(&areas, coord, packet.segments.items[segment_index.value]);
     }
 
@@ -363,6 +382,12 @@ fn appendAlphaTile(
     for (&areas, alpha_tile) |area, *alpha| {
         alpha.* = areaToAlpha(fill_rule, area);
     }
+}
+
+fn appendZeroAlphaTile(gpa: std.mem.Allocator, alphas: *std.ArrayList(u8)) !void {
+    const alpha_start = alphas.items.len;
+    try alphas.resize(gpa, alpha_start + strip.tile_area);
+    @memset(alphas.items[alpha_start..][0..strip.tile_area], 0);
 }
 
 fn accumulateSegmentAlphaTile(areas: *[strip.tile_area]f32, coord: gpu_fine.TaskCoord, seg: gpu_fine.GpuSegment) void {
@@ -707,6 +732,9 @@ test "direct strip materialized packet writes alpha bytes" {
     try std.testing.expectEqual(@as(u16, strip_kind_alpha), packet.strips.items[0].flags);
     try std.testing.expectEqual(@as(u32, strip.tile_area), packet.strips.items[0].alpha_count);
     try std.testing.expectEqual(@as(usize, strip.tile_area + gpu_strip_size + solid_paint_size), packet.stats.materialized_upload_bytes);
+    try std.testing.expectEqual(@as(usize, 1), packet.stats.materialized_single_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_multi_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_invalid_segment_refs);
 }
 
 test "direct strip materialized packet coalesces adjacent alpha tasks" {
@@ -742,6 +770,62 @@ test "direct strip materialized packet coalesces adjacent alpha tasks" {
     try std.testing.expectEqual(@as(u16, strip.tile_size * 2), packet.strips.items[0].width_px);
     try std.testing.expectEqual(@as(u32, strip.tile_area * 2), packet.strips.items[0].alpha_count);
     try std.testing.expectEqual(@as(usize, strip.tile_area * 2), packet.stats.materialized_alpha_bytes);
+    try std.testing.expectEqual(@as(usize, 2), packet.stats.materialized_single_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_multi_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_invalid_segment_refs);
+}
+
+test "direct strip materialized packet counts invalid alpha segment refs" {
+    const calls = [_]encode.EncodedCall{eligibleTestCall()};
+    var gpu_packet: gpu_fine.Packet = .{};
+    defer gpu_packet.deinit(std.testing.allocator);
+    try gpu_packet.calls.append(std.testing.allocator, .{ .fill_rule = @intFromEnum(strip.FillRule.nonzero) });
+    try gpu_packet.segment_indices.append(std.testing.allocator, .{ .value = 99 });
+    try gpu_packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(0, 0, 0, .{ .start = 0, .count = 1 }));
+    gpu_packet.stats.alpha_fill_tasks = 1;
+
+    var packet: Packet = .{};
+    defer packet.deinit(std.testing.allocator);
+    try std.testing.expect(try build(std.testing.allocator, &calls, &gpu_packet, &packet, null));
+
+    try std.testing.expectEqual(@as(usize, strip.tile_area), packet.alphas.items.len);
+    try std.testing.expectEqual(@as(u8, 0), packet.alphas.items[0]);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_single_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_multi_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 1), packet.stats.materialized_invalid_segment_refs);
+}
+
+test "direct strip materialized packet counts multi segment alpha tasks" {
+    const calls = [_]encode.EncodedCall{eligibleTestCall()};
+    var gpu_packet: gpu_fine.Packet = .{};
+    defer gpu_packet.deinit(std.testing.allocator);
+    try gpu_packet.calls.append(std.testing.allocator, .{ .fill_rule = @intFromEnum(strip.FillRule.nonzero) });
+    try gpu_packet.segments.append(std.testing.allocator, .{
+        .slope = 0,
+        .intercept = 0.5,
+        .min_y = 0,
+        .max_y = strip.tile_size,
+        .sign = 1,
+    });
+    try gpu_packet.segments.append(std.testing.allocator, .{
+        .slope = 0,
+        .intercept = 0.25,
+        .min_y = 0,
+        .max_y = strip.tile_size,
+        .sign = -1,
+    });
+    try gpu_packet.segment_indices.append(std.testing.allocator, .{ .value = 0 });
+    try gpu_packet.segment_indices.append(std.testing.allocator, .{ .value = 1 });
+    try gpu_packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(0, 0, 0, .{ .start = 0, .count = 2 }));
+    gpu_packet.stats.alpha_fill_tasks = 1;
+
+    var packet: Packet = .{};
+    defer packet.deinit(std.testing.allocator);
+    try std.testing.expect(try build(std.testing.allocator, &calls, &gpu_packet, &packet, null));
+
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_single_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 1), packet.stats.materialized_multi_segment_alpha_tasks);
+    try std.testing.expectEqual(@as(usize, 0), packet.stats.materialized_invalid_segment_refs);
 }
 
 test "direct strip materialized packet coalesces adjacent fill spans" {
