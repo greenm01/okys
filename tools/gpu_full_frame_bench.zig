@@ -10,6 +10,8 @@ const glue = sokol.glue;
 
 const SparseBackend = okys.systems.backend_sparse_strip.Backend;
 const GpuFinePacket = okys.systems.backend_sparse_strip.GpuFinePacket;
+const DirectStrip = okys.systems.backend_sparse_strip.direct_strip;
+const DirectStripPacket = DirectStrip.Packet;
 const frame_ops = okys.ops.frame;
 const sokol_device = okys.render.sokol_device;
 
@@ -61,6 +63,8 @@ const Accumulator = struct {
     texture_views_ns: u128 = 0,
     gpu_fine_ns: u128 = 0,
     direct_strip_estimate_ns: u128 = 0,
+    direct_strip_materialize_ns: u128 = 0,
+    direct_strip_materialize_samples: usize = 0,
     gpu_pack_records_ns: u128 = 0,
     gpu_strip_group_ns: u128 = 0,
     gpu_boundary_mark_ns: u128 = 0,
@@ -127,6 +131,14 @@ const Accumulator = struct {
     direct_compact_strip_instance_bytes: usize = 0,
     direct_compact_upload_bytes: usize = 0,
     direct_compact_upload_savings_bytes: usize = 0,
+    direct_materialized_strip_instances: usize = 0,
+    direct_materialized_alpha_strip_instances: usize = 0,
+    direct_materialized_solid_span_instances: usize = 0,
+    direct_materialized_alpha_bytes: usize = 0,
+    direct_materialized_strip_instance_bytes: usize = 0,
+    direct_materialized_paint_bytes: usize = 0,
+    direct_materialized_upload_bytes: usize = 0,
+    direct_materialized_upload_savings_bytes: usize = 0,
     batch_groups: usize = 0,
     batch_dispatches: usize = 0,
     batch_calls: usize = 0,
@@ -144,6 +156,8 @@ const Accumulator = struct {
         frame_ns: u64,
         frontend_ns: u64,
         build_ns: u64,
+        direct_strip_materialize_ns: u64,
+        direct_strip_stats: DirectStrip.Stats,
         profile: okys.systems.backend_sparse_strip.Profile,
         commit_ns: u64,
         gpu_wait: gpu_fence_wait.Result,
@@ -157,6 +171,10 @@ const Accumulator = struct {
         self.texture_views_ns += profile.texture_views_ns;
         self.gpu_fine_ns += profile.gpu_fine_ns;
         self.direct_strip_estimate_ns += profile.direct_strip_estimate_ns;
+        if (direct_strip_materialize_ns > 0) {
+            self.direct_strip_materialize_ns += direct_strip_materialize_ns;
+            self.direct_strip_materialize_samples += 1;
+        }
         self.gpu_pack_records_ns += profile.gpu_fine_profile.pack_records_ns;
         self.gpu_strip_group_ns += profile.gpu_fine_profile.strip_group_ns;
         self.gpu_boundary_mark_ns += profile.gpu_fine_profile.boundary_mark_ns;
@@ -225,6 +243,14 @@ const Accumulator = struct {
         self.direct_compact_strip_instance_bytes = profile.direct_strip_estimate.compact_strip_instance_bytes;
         self.direct_compact_upload_bytes = profile.direct_strip_estimate.compact_upload_bytes;
         self.direct_compact_upload_savings_bytes = profile.direct_strip_estimate.compactUploadSavingsVs(timing.upload_bytes);
+        self.direct_materialized_strip_instances = direct_strip_stats.materialized_strip_instances;
+        self.direct_materialized_alpha_strip_instances = direct_strip_stats.materialized_alpha_strip_instances;
+        self.direct_materialized_solid_span_instances = direct_strip_stats.materialized_solid_span_instances;
+        self.direct_materialized_alpha_bytes = direct_strip_stats.materialized_alpha_bytes;
+        self.direct_materialized_strip_instance_bytes = direct_strip_stats.materialized_strip_instance_bytes;
+        self.direct_materialized_paint_bytes = direct_strip_stats.materialized_paint_bytes;
+        self.direct_materialized_upload_bytes = direct_strip_stats.materialized_upload_bytes;
+        self.direct_materialized_upload_savings_bytes = direct_strip_stats.materializedUploadSavingsVs(timing.upload_bytes);
         self.batch_groups = timing.batch_groups;
         self.batch_dispatches = timing.batch_dispatches;
         self.batch_calls = timing.batch_calls;
@@ -245,6 +271,7 @@ var failed = false;
 var ctx: ?*bench_scenes.Context = null;
 var backend: ?*SparseBackend = null;
 var packet: GpuFinePacket = .{};
+var direct_packet: DirectStripPacket = .{};
 var frame_index: usize = 0;
 var accum: Accumulator = .{};
 const timing_mode: TimingMode = @enumFromInt(gpu_full_frame_options.timing_mode);
@@ -294,6 +321,8 @@ fn frame() callconv(.c) void {
 
     var frontend_ns: u64 = 0;
     var build_ns: u64 = 0;
+    var direct_strip_materialize_ns: u64 = 0;
+    var direct_strip_stats: DirectStrip.Stats = .{};
     var profile: okys.systems.backend_sparse_strip.Profile = .{};
     if (timing_mode.needsPacket()) {
         const context = ctx orelse {
@@ -392,7 +421,22 @@ fn frame() callconv(.c) void {
     const frame_ns = nowNs() - frame_start;
 
     if (frame_index >= warmup_frames) {
-        accum.add(frame_ns, frontend_ns, build_ns, profile, commit_ns, gpu_wait, timing);
+        if (timing_mode.needsPacket()) {
+            const sparse_backend = backend orelse {
+                fail("missing sparse backend", .{});
+                return;
+            };
+            if (frame_index == warmup_frames) {
+                const direct_strip_materialize_start = nowNs();
+                _ = DirectStrip.build(gpa, sparse_backend.calls.items, &packet, &direct_packet, null) catch |err| {
+                    fail("direct strip packet build failed: {s}", .{@errorName(err)});
+                    return;
+                };
+                direct_strip_materialize_ns = nowNs() - direct_strip_materialize_start;
+            }
+            direct_strip_stats = direct_packet.stats;
+        }
+        accum.add(frame_ns, frontend_ns, build_ns, direct_strip_materialize_ns, direct_strip_stats, profile, commit_ns, gpu_wait, timing);
     }
 
     frame_index += 1;
@@ -403,6 +447,7 @@ fn frame() callconv(.c) void {
 }
 
 fn cleanup() callconv(.c) void {
+    direct_packet.deinit(gpa);
     packet.deinit(gpa);
     if (ctx) |context| {
         context.backend = null;
@@ -426,7 +471,7 @@ fn fail(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tdirect_strip_estimate_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tdirect_supported\tdirect_calls\tdirect_eligible_calls\tdirect_fallback_calls\tdirect_fallback_images\tdirect_fallback_scissors\tdirect_fallback_clips\tdirect_fallback_gradients\tdirect_fallback_triangles\tdirect_strip_instances\tdirect_alpha_strip_instances\tdirect_solid_span_instances\tdirect_solid_span_tiles\tdirect_max_solid_span_tiles\tdirect_alpha_bytes\tdirect_strip_instance_bytes\tdirect_paint_bytes\tdirect_upload_bytes\tdirect_upload_savings_bytes\tdirect_compact_strip_instances\tdirect_compact_alpha_strip_instances\tdirect_compact_solid_span_instances\tdirect_compact_alpha_bytes\tdirect_compact_strip_instance_bytes\tdirect_compact_upload_bytes\tdirect_compact_upload_savings_bytes\tfallback\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tdirect_strip_estimate_avg_ns\tdirect_strip_materialize_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tdirect_supported\tdirect_calls\tdirect_eligible_calls\tdirect_fallback_calls\tdirect_fallback_images\tdirect_fallback_scissors\tdirect_fallback_clips\tdirect_fallback_gradients\tdirect_fallback_triangles\tdirect_strip_instances\tdirect_alpha_strip_instances\tdirect_solid_span_instances\tdirect_solid_span_tiles\tdirect_max_solid_span_tiles\tdirect_alpha_bytes\tdirect_strip_instance_bytes\tdirect_paint_bytes\tdirect_upload_bytes\tdirect_upload_savings_bytes\tdirect_compact_strip_instances\tdirect_compact_alpha_strip_instances\tdirect_compact_solid_span_instances\tdirect_compact_alpha_bytes\tdirect_compact_strip_instance_bytes\tdirect_compact_upload_bytes\tdirect_compact_upload_savings_bytes\tdirect_materialized_strip_instances\tdirect_materialized_alpha_strip_instances\tdirect_materialized_solid_span_instances\tdirect_materialized_alpha_bytes\tdirect_materialized_strip_instance_bytes\tdirect_materialized_paint_bytes\tdirect_materialized_upload_bytes\tdirect_materialized_upload_savings_bytes\tfallback\n");
 }
 
 fn printResult(result: Accumulator) void {
@@ -434,6 +479,10 @@ fn printResult(result: Accumulator) void {
     const cpu_encode_avg = average(result.cpu_encode_ns);
     const commit_avg = average(result.commit_ns);
     const submit_avg = cpu_encode_avg + commit_avg;
+    const direct_strip_materialize_avg = if (result.direct_strip_materialize_samples > 0)
+        @as(u64, @intCast(result.direct_strip_materialize_ns / result.direct_strip_materialize_samples))
+    else
+        0;
     const gpu_wait_avg = if (result.gpu_wait_samples > 0) @as(u64, @intCast(result.gpu_wait_ns / result.gpu_wait_samples)) else 0;
     const scene_name = "ghostscript_tiger";
     const timing_scope = timing_mode.label();
@@ -450,6 +499,7 @@ fn printResult(result: Accumulator) void {
     printIntField(average(result.texture_views_ns));
     printIntField(average(result.gpu_fine_ns));
     printIntField(average(result.direct_strip_estimate_ns));
+    printIntField(direct_strip_materialize_avg);
     printIntField(average(result.gpu_pack_records_ns));
     printIntField(average(result.gpu_strip_group_ns));
     printIntField(average(result.gpu_boundary_mark_ns));
@@ -526,6 +576,14 @@ fn printResult(result: Accumulator) void {
     printIntField(result.direct_compact_strip_instance_bytes);
     printIntField(result.direct_compact_upload_bytes);
     printIntField(result.direct_compact_upload_savings_bytes);
+    printIntField(result.direct_materialized_strip_instances);
+    printIntField(result.direct_materialized_alpha_strip_instances);
+    printIntField(result.direct_materialized_solid_span_instances);
+    printIntField(result.direct_materialized_alpha_bytes);
+    printIntField(result.direct_materialized_strip_instance_bytes);
+    printIntField(result.direct_materialized_paint_bytes);
+    printIntField(result.direct_materialized_upload_bytes);
+    printIntField(result.direct_materialized_upload_savings_bytes);
     printTextLast(fallbackName(result.fallback));
 }
 
