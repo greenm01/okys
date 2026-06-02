@@ -30,10 +30,21 @@ pub const Stats = struct {
     strip_instance_bytes: usize = 0,
     paint_bytes: usize = 0,
     upload_bytes: usize = 0,
+    compact_strip_instances: usize = 0,
+    compact_alpha_strip_instances: usize = 0,
+    compact_solid_span_instances: usize = 0,
+    compact_alpha_bytes: usize = 0,
+    compact_strip_instance_bytes: usize = 0,
+    compact_upload_bytes: usize = 0,
 
     pub fn uploadSavingsVs(self: Stats, current_upload_bytes: usize) usize {
         if (current_upload_bytes <= self.upload_bytes) return 0;
         return current_upload_bytes - self.upload_bytes;
+    }
+
+    pub fn compactUploadSavingsVs(self: Stats, current_upload_bytes: usize) usize {
+        if (current_upload_bytes <= self.compact_upload_bytes) return 0;
+        return current_upload_bytes - self.compact_upload_bytes;
     }
 };
 
@@ -50,31 +61,87 @@ pub fn estimate(calls: []const encode.EncodedCall, packet: *const gpu_fine.Packe
     stats.supported = stats.fallback_calls == 0;
     stats.paint_bytes = stats.eligible_calls * solid_paint_size;
 
+    var compact_run: CompactRun = .{};
     for (packet.tasks.items) |task| {
         const call_index: usize = @intCast(task.call_index);
-        if (call_index >= calls.len or !eligibleCallFast(calls[call_index])) continue;
+        if (call_index >= calls.len or !eligibleCallFast(calls[call_index])) {
+            compact_run.flush(&stats);
+            continue;
+        }
 
         const kind = task.segment_count_kind;
+        const coord = gpu_fine.taskCoord(task);
         if ((kind & gpu_fine.task_kind_alpha_mask) != 0) {
             stats.alpha_strip_instances += 1;
             stats.alpha_bytes += strip.tile_area;
+            compact_run.append(&stats, .alpha, task.call_index, coord.x, coord.y, 1);
         } else if ((kind & gpu_fine.task_kind_fill_span_mask) != 0) {
             const tile_count = @as(usize, @intCast(@max(kind & gpu_fine.task_payload_mask, 1)));
             stats.solid_span_instances += 1;
             stats.solid_span_tiles += tile_count;
             stats.max_solid_span_tiles = @max(stats.max_solid_span_tiles, tile_count);
+            compact_run.append(&stats, .solid, task.call_index, coord.x, coord.y, @intCast(tile_count));
         } else {
             stats.solid_span_instances += 1;
             stats.solid_span_tiles += 1;
             stats.max_solid_span_tiles = @max(stats.max_solid_span_tiles, 1);
+            compact_run.append(&stats, .solid, task.call_index, coord.x, coord.y, 1);
         }
     }
+    compact_run.flush(&stats);
 
     stats.strip_instances = stats.alpha_strip_instances + stats.solid_span_instances;
     stats.strip_instance_bytes = stats.strip_instances * gpu_strip_size;
     stats.upload_bytes = stats.alpha_bytes + stats.strip_instance_bytes + stats.paint_bytes;
+    stats.compact_strip_instances = stats.compact_alpha_strip_instances + stats.compact_solid_span_instances;
+    stats.compact_alpha_bytes = stats.alpha_bytes;
+    stats.compact_strip_instance_bytes = stats.compact_strip_instances * gpu_strip_size;
+    stats.compact_upload_bytes = stats.compact_alpha_bytes + stats.compact_strip_instance_bytes + stats.paint_bytes;
     return stats;
 }
+
+const CompactKind = enum {
+    alpha,
+    solid,
+};
+
+const CompactRun = struct {
+    active: bool = false,
+    kind: CompactKind = .alpha,
+    call_index: u32 = 0,
+    y: u32 = 0,
+    end_x: u32 = 0,
+
+    fn append(self: *CompactRun, stats: *Stats, kind: CompactKind, call_index: u32, x: u32, y: u32, width_tiles: u32) void {
+        const width_px = @as(u32, strip.tile_size) * width_tiles;
+        const end_x = x + width_px;
+        if (self.active and
+            self.kind == kind and
+            self.call_index == call_index and
+            self.y == y and
+            self.end_x == x)
+        {
+            self.end_x = end_x;
+            return;
+        }
+
+        self.flush(stats);
+        self.active = true;
+        self.kind = kind;
+        self.call_index = call_index;
+        self.y = y;
+        self.end_x = end_x;
+    }
+
+    fn flush(self: *CompactRun, stats: *Stats) void {
+        if (!self.active) return;
+        switch (self.kind) {
+            .alpha => stats.compact_alpha_strip_instances += 1,
+            .solid => stats.compact_solid_span_instances += 1,
+        }
+        self.active = false;
+    }
+};
 
 fn eligibleCall(call: encode.EncodedCall, stats: *Stats) bool {
     var ok = true;
@@ -146,6 +213,8 @@ test "direct strip estimator counts eligible alpha and solid span tasks" {
     try std.testing.expectEqual(@as(usize, strip.tile_area), stats.alpha_bytes);
     try std.testing.expectEqual(@as(usize, 4), stats.solid_span_tiles);
     try std.testing.expectEqual(@as(usize, strip.tile_area + gpu_strip_size * 2 + solid_paint_size), stats.upload_bytes);
+    try std.testing.expectEqual(@as(usize, 2), stats.compact_strip_instances);
+    try std.testing.expectEqual(stats.upload_bytes, stats.compact_upload_bytes);
 }
 
 test "direct strip estimator rejects image scissor clip gradient and triangle calls" {
@@ -174,4 +243,65 @@ test "direct strip estimator rejects image scissor clip gradient and triangle ca
     try std.testing.expectEqual(@as(usize, 1), stats.fallback_scissors);
     try std.testing.expectEqual(@as(usize, 1), stats.fallback_triangles);
     try std.testing.expectEqual(@as(usize, 1), stats.fallback_clips);
+}
+
+test "direct strip compact estimator coalesces adjacent alpha tasks" {
+    const calls = [_]encode.EncodedCall{eligibleTestCall()};
+    var packet: gpu_fine.Packet = .{};
+    defer packet.deinit(std.testing.allocator);
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(0, 0, 0, .{}));
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(strip.tile_size, 0, 0, .{}));
+
+    const stats = estimate(&calls, &packet);
+    try std.testing.expectEqual(@as(usize, 2), stats.alpha_strip_instances);
+    try std.testing.expectEqual(@as(usize, 1), stats.compact_alpha_strip_instances);
+    try std.testing.expectEqual(@as(usize, 1), stats.compact_strip_instances);
+    try std.testing.expectEqual(@as(usize, strip.tile_area * 2), stats.compact_alpha_bytes);
+}
+
+test "direct strip compact estimator splits nonadjacent alpha tasks" {
+    const calls = [_]encode.EncodedCall{eligibleTestCall()};
+    var packet: gpu_fine.Packet = .{};
+    defer packet.deinit(std.testing.allocator);
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(0, 0, 0, .{}));
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(strip.tile_size * 2, 0, 0, .{}));
+
+    const stats = estimate(&calls, &packet);
+    try std.testing.expectEqual(@as(usize, 2), stats.alpha_strip_instances);
+    try std.testing.expectEqual(@as(usize, 2), stats.compact_alpha_strip_instances);
+}
+
+test "direct strip compact estimator coalesces adjacent fill spans past current task cap" {
+    const calls = [_]encode.EncodedCall{eligibleTestCall()};
+    var packet: gpu_fine.Packet = .{};
+    defer packet.deinit(std.testing.allocator);
+    try packet.tasks.append(std.testing.allocator, gpu_fine.fillSpanTask(0, 0, 0, 2));
+    try packet.tasks.append(std.testing.allocator, gpu_fine.fillSpanTask(strip.tile_size * 2, 0, 0, 2));
+
+    const stats = estimate(&calls, &packet);
+    try std.testing.expectEqual(@as(usize, 2), stats.solid_span_instances);
+    try std.testing.expectEqual(@as(usize, 1), stats.compact_solid_span_instances);
+    try std.testing.expectEqual(@as(usize, 4), stats.solid_span_tiles);
+}
+
+test "direct strip compact estimator flushes on call row and kind changes" {
+    const calls = [_]encode.EncodedCall{ eligibleTestCall(), eligibleTestCall() };
+    var packet: gpu_fine.Packet = .{};
+    defer packet.deinit(std.testing.allocator);
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(0, 0, 0, .{}));
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(strip.tile_size, 0, 1, .{}));
+    try packet.tasks.append(std.testing.allocator, gpu_fine.alphaTask(strip.tile_size * 2, strip.tile_size, 1, .{}));
+    try packet.tasks.append(std.testing.allocator, gpu_fine.fillSpanTask(strip.tile_size * 3, strip.tile_size, 1, 1));
+
+    const stats = estimate(&calls, &packet);
+    try std.testing.expectEqual(@as(usize, 4), stats.strip_instances);
+    try std.testing.expectEqual(@as(usize, 4), stats.compact_strip_instances);
+}
+
+fn eligibleTestCall() encode.EncodedCall {
+    return .{
+        .kind = .fill,
+        .paint = color.solid(color.rgbaf(1, 0, 0, 1)),
+        .scissor = .{ .xform = .{ 1, 0, 0, 1, 0, 0 }, .extent = .{ -1, -1 } },
+    };
 }

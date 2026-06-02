@@ -120,6 +120,13 @@ const Accumulator = struct {
     direct_paint_bytes: usize = 0,
     direct_upload_bytes: usize = 0,
     direct_upload_savings_bytes: usize = 0,
+    direct_compact_strip_instances: usize = 0,
+    direct_compact_alpha_strip_instances: usize = 0,
+    direct_compact_solid_span_instances: usize = 0,
+    direct_compact_alpha_bytes: usize = 0,
+    direct_compact_strip_instance_bytes: usize = 0,
+    direct_compact_upload_bytes: usize = 0,
+    direct_compact_upload_savings_bytes: usize = 0,
     batch_groups: usize = 0,
     batch_dispatches: usize = 0,
     batch_calls: usize = 0,
@@ -211,6 +218,13 @@ const Accumulator = struct {
         self.direct_paint_bytes = profile.direct_strip_estimate.paint_bytes;
         self.direct_upload_bytes = profile.direct_strip_estimate.upload_bytes;
         self.direct_upload_savings_bytes = profile.direct_strip_estimate.uploadSavingsVs(timing.upload_bytes);
+        self.direct_compact_strip_instances = profile.direct_strip_estimate.compact_strip_instances;
+        self.direct_compact_alpha_strip_instances = profile.direct_strip_estimate.compact_alpha_strip_instances;
+        self.direct_compact_solid_span_instances = profile.direct_strip_estimate.compact_solid_span_instances;
+        self.direct_compact_alpha_bytes = profile.direct_strip_estimate.compact_alpha_bytes;
+        self.direct_compact_strip_instance_bytes = profile.direct_strip_estimate.compact_strip_instance_bytes;
+        self.direct_compact_upload_bytes = profile.direct_strip_estimate.compact_upload_bytes;
+        self.direct_compact_upload_savings_bytes = profile.direct_strip_estimate.compactUploadSavingsVs(timing.upload_bytes);
         self.batch_groups = timing.batch_groups;
         self.batch_dispatches = timing.batch_dispatches;
         self.batch_calls = timing.batch_calls;
@@ -412,7 +426,7 @@ fn fail(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printHeader() void {
-    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tdirect_strip_estimate_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tdirect_supported\tdirect_calls\tdirect_eligible_calls\tdirect_fallback_calls\tdirect_fallback_images\tdirect_fallback_scissors\tdirect_fallback_clips\tdirect_fallback_gradients\tdirect_fallback_triangles\tdirect_strip_instances\tdirect_alpha_strip_instances\tdirect_solid_span_instances\tdirect_solid_span_tiles\tdirect_max_solid_span_tiles\tdirect_alpha_bytes\tdirect_strip_instance_bytes\tdirect_paint_bytes\tdirect_upload_bytes\tdirect_upload_savings_bytes\tfallback\n");
+    _ = std.c.printf("scene\tbackend\ttiming_scope\tframes\tframe_avg_ns\tsubmit_avg_ns\tfrontend_avg_ns\tbuild_avg_ns\tbin_avg_ns\tcoarse_avg_ns\ttexture_views_avg_ns\tgpu_fine_avg_ns\tdirect_strip_estimate_avg_ns\tgpu_pack_records_avg_ns\tgpu_strip_group_avg_ns\tgpu_boundary_mark_avg_ns\tgpu_fill_task_avg_ns\tgpu_crossing_collect_avg_ns\tgpu_crossing_sort_avg_ns\tgpu_fill_emit_avg_ns\tcrossing_rows_avg\tcrossing_items_avg\tcrossing_sort_rows_avg\tmax_crossings_per_row\tboundary_checks_avg\tboundary_hits_avg\tfill_candidates_avg\talpha_segment_refs_avg\tmax_alpha_segments_per_task\tcpu_encode_avg_ns\tcommit_avg_ns\tresource_avg_ns\tupload_avg_ns\tcompute_encode_avg_ns\tblit_encode_avg_ns\tgpu_wait_avg_ns\tgpu_wait_supported\tgpu_wait_kind\tgpu_wait_status\tcalls\tnonempty_calls\ttasks\tfill_tasks\talpha_fill_tasks\tsegment_indices\tfill_span_tiles\tmax_fill_span_tiles\tdispatches\tbatch_groups\tbatch_dispatches\tbatch_calls\tbatch_tasks\tmax_batch_calls\tmax_batch_tasks\tbatch_break_task_gap\tbatch_break_image_mismatch\tbatch_break_invalid_bounds\tbatch_break_overlap\tupload_bytes\tcalls_bytes\tsegments_bytes\ttasks_bytes\tsegment_indices_bytes\tdirect_supported\tdirect_calls\tdirect_eligible_calls\tdirect_fallback_calls\tdirect_fallback_images\tdirect_fallback_scissors\tdirect_fallback_clips\tdirect_fallback_gradients\tdirect_fallback_triangles\tdirect_strip_instances\tdirect_alpha_strip_instances\tdirect_solid_span_instances\tdirect_solid_span_tiles\tdirect_max_solid_span_tiles\tdirect_alpha_bytes\tdirect_strip_instance_bytes\tdirect_paint_bytes\tdirect_upload_bytes\tdirect_upload_savings_bytes\tdirect_compact_strip_instances\tdirect_compact_alpha_strip_instances\tdirect_compact_solid_span_instances\tdirect_compact_alpha_bytes\tdirect_compact_strip_instance_bytes\tdirect_compact_upload_bytes\tdirect_compact_upload_savings_bytes\tfallback\n");
 }
 
 fn printResult(result: Accumulator) void {
@@ -505,6 +519,13 @@ fn printResult(result: Accumulator) void {
     printIntField(result.direct_paint_bytes);
     printIntField(result.direct_upload_bytes);
     printIntField(result.direct_upload_savings_bytes);
+    printIntField(result.direct_compact_strip_instances);
+    printIntField(result.direct_compact_alpha_strip_instances);
+    printIntField(result.direct_compact_solid_span_instances);
+    printIntField(result.direct_compact_alpha_bytes);
+    printIntField(result.direct_compact_strip_instance_bytes);
+    printIntField(result.direct_compact_upload_bytes);
+    printIntField(result.direct_compact_upload_savings_bytes);
     printTextLast(fallbackName(result.fallback));
 }
 
